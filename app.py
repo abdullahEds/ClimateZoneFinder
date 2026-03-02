@@ -1018,7 +1018,10 @@ def generate_nbc_pdf_report(location_name, state_name, climate_zone, latitude, l
         ['Climate Zone', climate_zone]
     ]
     
-    location_table = Table(location_data, colWidths=[2*inch, 3.5*inch])
+    story.append(Spacer(1, 0.1*inch))
+
+
+    location_table = Table(location_data, colWidths=[3*inch, 3*inch], hAlign='LEFT')
     location_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.whitesmoke),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
@@ -1035,14 +1038,14 @@ def generate_nbc_pdf_report(location_name, state_name, climate_zone, latitude, l
     ]))
     
     story.append(location_table)
-    story.append(Spacer(1, 0.3*inch))
+    story.append(Spacer(1, 0.1*inch))
     
     # Climate Zone Information
     story.append(Paragraph("Climate Zone Designation", heading_style))
     
     zone_info_text = f"""
     This location falls under the <b>{climate_zone}</b> climate classification as per the 
-    National Building Code (NBC) of India. Understanding the climatic characteristics 
+    National Building Code (NBC-2016) of India. Understanding the climatic characteristics 
     of this zone is essential for designing energy-efficient buildings by following the Passive Design Strategies.
     """
     story.append(Paragraph(zone_info_text, body_style))
@@ -1077,7 +1080,7 @@ def generate_nbc_pdf_report(location_name, state_name, climate_zone, latitude, l
     # Footer information
     footer_text = f"""
     <b>Report Generated On:</b> {datetime.now().strftime('%B %d, %Y at %I:%M %p')}<br/>
-    <b>Classification Standard:</b> National Building Code (NBC)<br/>
+    <b>Classification Standard:</b> National Building Code (NBC-2016)<br/>
     <br/>
     <i>This report provides climate-specific design strategies for sustainable and energy-efficient buildings. 
     For more information, visit the Climate Zone Finder dashboard.</i>
@@ -1171,7 +1174,7 @@ left_col, right_col = st.columns([1, 2.5])
 
 with left_col:
     st.markdown('<div class="label-text">Climate Classification Standard</div>', unsafe_allow_html=True)
-    standard_options = ["ASHRAE-169 (2013)", "NBC"]
+    standard_options = ["ASHRAE-169 (2013)", "NBC-2016"]
     select_standard = st.selectbox("Select Standard", standard_options, key="standard", label_visibility="collapsed", width=250)
 
     # ASHRAE Standard
@@ -1240,19 +1243,19 @@ with left_col:
         if not result.empty and pd.notna(result.iloc[0].get("EPW File", None)):
             epw_url = result.iloc[0]["EPW File"]
             if epw_url and str(epw_url).strip() != "" and str(epw_url) != "0":
-                st.button("Download EPW ", epw_url, type="secondary", width=200)
+                st.link_button("Download EPW", epw_url, type="secondary", width=200)
             else:
                 st.button("Download EPW", type="secondary", disabled=True, width=200)
         else:
-            st.button("Download EPW", type="secondary", disabled=True, width=200)    
+            st.button("Download EPW", type="secondary", disabled=True, width=200)
         if report_clicked and not result.empty:
             st.info("Report generation for ASHRAE is under development. Please check back soon.")
 
     # NBC Standard (India)
-    elif select_standard == "NBC":
+    elif select_standard == "NBC-2016":
         df = load_nbc_data()
         
-        st.markdown('<div class="section-title">📍 Location Selection (India)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Location Selection</div>', unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         # Country
@@ -1292,11 +1295,11 @@ with left_col:
         if not result.empty and pd.notna(result.iloc[0].get("EPW File", None)):
             epw_url = result.iloc[0]["EPW File"]
             if epw_url and str(epw_url).strip() != "" and str(epw_url) != "0":
-                st.link_button("Download EPW", epw_url, type="secondary", use_container_width=False, width=200)
+                st.link_button("Download EPW", epw_url, type="secondary", width=200)
             else:
-                st.button("Download EPW", type="secondary", disabled=True, use_container_width=False, width=200)
+                st.link_button("Download EPW", type="secondary", disabled=True, width=200)
         else:
-            st.button("Download EPW", type="secondary", disabled=True, use_container_width=False, width=200)
+            st.link_button("Download EPW", type="secondary", disabled=True, width=200)
         
         # report_clicked and not result.empty:
         epw_file = result.iloc[0].get("EPW File", "Not Available")
@@ -1326,8 +1329,8 @@ with left_col:
             data=pdf_data,
             file_name=filename,
             mime="application/pdf",
-            type="primary",
-            use_container_width=False
+            type="secondary",
+            width=200
             )
 
             
@@ -1358,7 +1361,7 @@ with right_col:
         else:
             st.info("Please select a location to view on the map.")
     
-    elif select_standard == "NBC":
+    elif select_standard == "NBC-2016":
         if not result.empty:
             lat_selected = result.iloc[0]["Latitude"]
             lon_selected = result.iloc[0]["Longitude"]
@@ -1380,7 +1383,7 @@ with right_col:
 
 
 # Images Section - Display below the map (outside columns)
-if select_standard == "NBC":
+if select_standard == "NBC-2016":
     if not result.empty and climate_zone:
         display_climate_zone_images(climate_zone)
 
