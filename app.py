@@ -25,61 +25,97 @@ def get_base64_image(image_path):
 
 logo_base64 = get_base64_image("images/EDSlogo.jpg")
 
-# CSS for Header
-st.markdown(
-    f"""
-    <style>
-        .app-header {{
-            display: grid;
-            grid-template-columns: auto 1fr auto;
-            align-items: center;
-            padding: 5px 0px;
-            border-bottom: 1px solid #e6e6e6;
-            background-color: white;
-            box-shadow: 0 1px 4px rgba(0,0,0,0);
-            color: #a85c42;
-            font-weight: bold;
-        }}
+# STEP 1: Create header using st.columns for proper layout
+col_logo, col_title, col_button = st.columns([1, 4, 1])
 
-        .app-header img {{
-            height: 80px;
-        }}
-        
-        .app-header img:hover {{
-            transform: scale(1.1);
-            opacity: 0.85;
-        }}
+with col_logo:
+    st.markdown(
+        f'<img src="data:image/png;base64,{logo_base64}" style="height: 80px; margin-top: 30px;">',
+        unsafe_allow_html=True
+    )
 
-        .header-title {{
-            text-align: center;
-            font-size: 30px;
-            font-weight: bold;
-            color: #a85c42;
-            margin: 0;
-        }}
-    </style>
+with col_title:
+    st.markdown(
+        '<h2 style="text-align: center; color: #a85c42; margin-top: 35px;">CLIMATE ZONE FINDER</h2>',
+        unsafe_allow_html=True
+    )
 
-    <div class="app-header">
-        <img src="data:image/png;base64,{logo_base64}" />
-        <h2 class="header-title">CLIMATE ZONE FINDER</h2>
-        <div></div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+with col_button:
+    if st.button("Analysis", key="analysis_nav"):
+        st.switch_page("pages/analysis.py")
 
-# CSS for styling UI components
+# STEP 2: Add CSS to style everything
 st.markdown("""
     <style>
-    /* Remove top padding/margin */
+    /* Remove default padding */
     .block-container {
-        padding-top: 2.4rem !important;
-        padding-bottom: 0rem !important;
-        padding-left: 3rem !important;
-        padding-right: 3rem !important;
+        padding-top: 1.7rem !important;
+    }
+    /* Hide the entire sidebar */
+    section[data-testid="stSidebar"] {
+        display: none !important;
     }
     
-
+    /* Remove the sidebar toggle button */
+    button[kind="header"] {
+        display: none !important;
+    }
+    
+    /* Expand main content to full width since sidebar is hidden */
+    .main .block-container {
+        max-width: 100% !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
+    }
+    
+    /* Style the header columns container */
+    div[data-testid="stHorizontalBlock"]:first-of-type {
+        border-bottom: 1px solid #e6e6e6;
+        padding-bottom: 20px;
+        margin-bottom: 30px;
+        background-color: white;
+    }
+    
+    /* Style the Analysis button in the header */
+    div[data-testid="stHorizontalBlock"]:first-of-type .stButton {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        height: 150%;
+    }
+    
+    div[data-testid="stHorizontalBlock"]:first-of-type .stButton > button {
+        background-color: #a85c42 !important;
+        color: white !important;
+        border: none !important;
+        padding: 12px 50px !important;
+        font-size: 22px !important;
+        font-weight: 500 !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        margin-top: 20px !important;
+        height: 50px !important;
+        width: 170px ;
+        
+    }
+    
+    div[data-testid="stHorizontalBlock"]:first-of-type .stButton > button:hover {
+        background-color: #8a4a35 !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2) !important;
+    }
+    
+    div[data-testid="stHorizontalBlock"]:first-of-type .stButton > button:active {
+        transform: translateY(0px) !important;
+    }
+    
+    /* Logo hover effect */
+    div[data-testid="stHorizontalBlock"]:first-of-type img:hover {
+        transform: scale(1.05);
+        opacity: 0.85;
+        transition: all 0.3s ease;
+    }
+    
     .description {
         text-align: center;
         color: #666;
@@ -129,6 +165,8 @@ st.markdown("""
         border-radius: 8px;
         margin-bottom: 15px;
         backdrop-filter: blur(10px);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+
     }
     .report-label {
         font-size: 14px;
@@ -142,7 +180,7 @@ st.markdown("""
     
     /* Adjust selectbox width */
     .stSelectbox > div > div {
-        max-width: 100% !important;
+        max-width: 90% !important;
     }
     
     /* nbc Zone Images Styling */
@@ -902,6 +940,7 @@ def add_page_header(canvas, doc):
     
     canvas.restoreState()
 
+
 def generate_nbc_pdf_report(location_name, state_name, climate_zone, latitude, longitude, zone_info):
     """Generate a comprehensive PDF report for NBC climate zone"""
     
@@ -912,7 +951,7 @@ def generate_nbc_pdf_report(location_name, state_name, climate_zone, latitude, l
         pagesize=letter,
         rightMargin=0.5*inch,
         leftMargin=0.5*inch,
-        topMargin=1.3*inch,  
+        topMargin=1.3*inch,  # Increased to accommodate header
         bottomMargin=0.5*inch
     )
     

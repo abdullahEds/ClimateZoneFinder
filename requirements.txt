@@ -7,3 +7,6 @@ shapely
 altair==4.2.2
 rich==13.9.4
 openpyxl
+plotly
+python-pptx
+kaleido
