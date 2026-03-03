@@ -2,13 +2,14 @@ import streamlit as st
 import base64
 import pandas as pd
 import plotly.express as px
+import numpy as np
 import io
 import re
+import pytz
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
-import io
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import tempfile
@@ -710,6 +711,28 @@ Relative Humidity:
     
     return report_bytes
 
+def convert_epw_timezone(tz_offset):
+    """Convert EPW numeric timezone to valid pytz timezone string."""
+    # Common mappings for EPW numeric timezone offsets
+    tz_map = {
+        5.5: "Asia/Kolkata",
+        0: "UTC",
+        -5: "Etc/GMT+5",
+        -6: "Etc/GMT+6",
+        -7: "Etc/GMT+7",
+        -8: "Etc/GMT+8",
+        1: "Europe/London",
+        2: "Europe/Paris",
+    }
+    try:
+        tz_float = float(tz_offset)
+        if tz_float in tz_map:
+            return tz_map[tz_float]
+    except (ValueError, TypeError):
+        pass
+    return "UTC"
+
+
 def parse_epw(epw_text: str) -> tuple:
     """Parse EPW formatted text and return a tuple of (DataFrame, metadata).
     
@@ -730,7 +753,7 @@ def parse_epw(epw_text: str) -> tuple:
                 metadata["latitude"] = float(header[6].strip())
                 metadata["longitude"] = float(header[7].strip())
             if len(header) >= 9:
-                metadata["timezone"] = header[8].strip()
+                metadata["timezone"] = convert_epw_timezone(header[8].strip())
         except (ValueError, IndexError, TypeError):
             pass
     
@@ -789,7 +812,7 @@ def parse_epw(epw_text: str) -> tuple:
 
 
 def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
-    """Generate and display a Sun Path Diagram using EPW data.
+    """Generate and display an interactive Sun Path Diagram using Plotly.
     
     Args:
         data: DataFrame with datetime and weather data
@@ -797,144 +820,201 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
     """
     try:
         from pvlib import solarposition
-        import numpy as np
-        import matplotlib.pyplot as plt
+        import plotly.graph_objects as go
     except ImportError:
-        st.error("Required packages not found. Please ensure pvlib is installed.")
+        st.error("Required packages not found. Please ensure pvlib and plotly are installed.")
         return
     
     # Extract location information from metadata
     lat = metadata.get("latitude")
     lon = metadata.get("longitude")
-    tz = metadata.get("timezone", "UTC")
+    tz_str = metadata.get("timezone", "UTC")
     
     if lat is None or lon is None:
-        st.error("Location information (latitude/longitude) not found in EPW file header.")
+        st.error("Location information (latitude/longitude) not found in EPW file.")
         return
     
     try:
-        # Convert numeric timezone offset (e.g., "5.5" for UTC+5:30) to proper timezone format
-        tz_for_localize = "UTC"
+        # Get timezone object using pytz
         try:
-            tz_offset = float(tz)
-            # Convert decimal hours to hours and minutes
-            hours = int(tz_offset)
-            minutes = int((tz_offset - hours) * 60)
-            sign = "+" if tz_offset >= 0 else "-"
-            tz_for_localize = f"UTC{sign}{abs(hours):02d}:{abs(minutes):02d}"
-        except (ValueError, TypeError):
-            # If tz is already a string like "Asia/Calcutta", use it as is
-            tz_for_localize = tz
+            tz = pytz.timezone(tz_str)
+        except:
+            # Fallback: try to parse numeric timezone
+            try:
+                tz_offset = float(tz_str)
+                hours = int(tz_offset)
+                minutes = int((tz_offset - hours) * 60)
+                sign = "+" if tz_offset >= 0 else "-"
+                tz_for_localize = f"UTC{sign}{abs(hours):02d}:{abs(minutes):02d}"
+                tz = pytz.timezone(tz_for_localize)
+            except:
+                tz = pytz.UTC
         
-        # Ensure datetime index is timezone-aware
-        times = data["datetime"].copy()
-        if times.dt.tz is None:
-            times = times.dt.tz_localize(tz_for_localize)
-        else:
-            times = times.dt.tz_convert(tz_for_localize)
+        # Create full year of hourly times
+        times = pd.date_range(
+            "2020-01-01 00:00:00",
+            "2021-01-01 00:00:00",
+            freq="h",
+            tz=tz,
+            inclusive="left"
+        )
         
-        # Calculate solar position
+        # Calculate solar positions for entire year
         solpos = solarposition.get_solarposition(times, lat, lon)
         
-        # Filter out nighttime values (apparent_elevation > 0)
-        solpos_daytime = solpos.loc[solpos['apparent_elevation'] > 0, :].copy()
+        # Filter to daytime only (elevation > 0)
+        solpos = solpos[solpos["apparent_elevation"] > 0]
         
-        if len(solpos_daytime) == 0:
-            st.error("No daytime solar positions found in the EPW data.")
+        if solpos.empty:
+            st.error("No daytime solar positions found. Check timezone or location.")
             return
         
-        # Create figure with polar projection
-        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+        # Convert to polar coordinates (zenith distance = 90 - elevation)
+        solpos["r"] = 90 - solpos["apparent_elevation"]
+        solpos["theta"] = solpos["azimuth"]
         
-        # Draw the analemma loops (all hours colored by day of year)
-        points = ax.scatter(
-            np.radians(solpos_daytime.azimuth),
-            solpos_daytime.apparent_zenith,
-            s=4,
-            c=solpos_daytime.index.dayofyear,
-            cmap='twilight_shifted_r',
-            alpha=0.6,
-            label='Analemma'
-        )
+        # Create figure
+        fig = go.Figure()
         
-        # Format and add colorbar with month labels
-        cbar = fig.colorbar(points, ax=ax, pad=0.1)
-        cbar.set_label('Day of Year', rotation=270, labelpad=20)
-        
-        # Create month ticks for colorbar
-        month_doys_mid = [pd.Timestamp(f'2020-{m:02d}-15').dayofyear for m in range(1, 13)]
-        month_labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        cbar.set_ticks(month_doys_mid)
-        cbar.set_ticklabels(month_labels)
-        
-        # Draw hour labels at positions with minimum zenith angle per hour
-        for hour in np.unique(solpos_daytime.index.hour):
-            subset = solpos_daytime.loc[solpos_daytime.index.hour == hour, :]
-            if len(subset) > 0:
-                # Find position with minimum zenith (highest point in sky)
-                min_zenith_idx = subset['apparent_zenith'].idxmin()
-                pos = solpos_daytime.loc[min_zenith_idx]
-                
-                ax.text(
-                    np.radians(pos['azimuth']),
-                    pos['apparent_zenith'],
-                    f"{hour:02d}",
-                    ha='center',
-                    va='center',
-                    fontsize=8,
-                    fontweight='bold'
+        # ========================
+        # Add analemma curves (one per hour of day)
+        # ========================
+        for hour in range(24):
+            subset = solpos[solpos.index.hour == hour]
+            
+            if subset.empty:
+                continue
+            
+            # Format hover text components
+            month_names = subset.index.strftime("%B")
+            hour_formatted = subset.index.strftime("%I:00 %p")
+            
+            customdata = np.stack(
+                (
+                    month_names,
+                    subset.index.day,
+                    hour_formatted,
+                    subset["apparent_elevation"],
+                    subset["azimuth"],
+                ),
+                axis=-1,
+            )
+            
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=subset["r"],
+                    theta=subset["theta"],
+                    mode="lines+markers",
+                    marker=dict(size=4, color="rgba(0, 100, 200, 0.6)"),
+                    line=dict(width=1, color="rgba(0, 100, 200, 0.5)"),
+                    showlegend=False,
+                    customdata=customdata,
+                    hovertemplate=(
+                        "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                        "Time: %{customdata[2]}<br>"
+                        "Altitude: %{customdata[3]:.1f}°<br>"
+                        "Azimuth: %{customdata[4]:.1f}°"
+                        "<extra></extra>"
+                    ),
                 )
+            )
         
-        # Draw solstice and equinox curves
-        special_dates = {
-            'Mar 21 (Equinox)': '2020-03-21',
-            'Jun 21 (Solstice)': '2020-06-21',
-            'Dec 21 (Solstice)': '2020-12-21'
+        # ========================
+        # Add special solar dates (equinoxes and solstices)
+        # ========================
+        key_dates = {
+            "Mar 21 (Spring)": ("2020-03-21", "#FF9500"),
+            "Jun 21 (Summer)": ("2020-06-21", "#FF0000"),
+            "Dec 21 (Winter)": ("2020-12-21", "#0066CC"),
         }
         
-        colors = {'Mar 21 (Equinox)': '#FF9500', 'Jun 21 (Solstice)': '#FF0000', 'Dec 21 (Solstice)': '#0066CC'}
-        
-        for label, date_str in special_dates.items():
+        for label, (date_str, color) in key_dates.items():
             date = pd.Timestamp(date_str)
-            times_daily = pd.date_range(date, date + pd.Timedelta('24h'), freq='5min', tz=tz_for_localize)
-            solpos_daily = solarposition.get_solarposition(times_daily, lat, lon)
-            solpos_daily = solpos_daily.loc[solpos_daily['apparent_elevation'] > 0, :]
+            day_times = pd.date_range(
+                date,
+                date + pd.Timedelta("1D"),
+                freq="5min",
+                tz=tz,
+                inclusive="left"
+            )
             
-            if len(solpos_daily) > 0:
-                ax.plot(
-                    np.radians(solpos_daily.azimuth),
-                    solpos_daily.apparent_zenith,
-                    label=label,
-                    linewidth=2.5,
-                    color=colors[label]
+            sol = solarposition.get_solarposition(day_times, lat, lon)
+            sol = sol[sol["apparent_elevation"] > 0]
+            
+            if sol.empty:
+                continue
+            
+            r = 90 - sol["apparent_elevation"]
+            theta = sol["azimuth"]
+            
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=r,
+                    theta=theta,
+                    mode="lines",
+                    line=dict(width=3, color=color),
+                    name=label,
+                    showlegend=True,
+                    hovertemplate=(
+                        f"<b>{label}</b><br>"
+                        "Altitude: %{customdata[0]:.1f}°<br>"
+                        "Azimuth: %{theta:.1f}°"
+                        "<extra></extra>"
+                    ),
+                    customdata=np.stack((sol["apparent_elevation"],), axis=-1),
                 )
+            )
         
-        # Configure polar coordinates (compass-like orientation)
-        ax.set_theta_zero_location('N')  # 0° = North
-        ax.set_theta_direction(-1)  # Clockwise direction
-        ax.set_rmax(90)  # Zenith angle goes from 0 (zenith) to 90 (horizon)
-        ax.set_ylim(0, 90)
-        
-        # Add grid
-        ax.grid(True, linestyle='--', alpha=0.3)
-        
-        # Add title and legend
-        ax.set_title('Sun Path Diagram', fontsize=16, fontweight='bold', pad=20)
-        
-        # Position legend outside the plot
-        ax.legend(
-            loc='upper left',
-            bbox_to_anchor=(1.1, 1.0),
-            fontsize=9,
-            framealpha=0.9
+        # ========================
+        # Configure polar layout
+        # ========================
+        fig.update_layout(
+            title={
+                'text': '☀️ Sun Path Diagram',
+                'font': {'size': 24, 'color': '#8B4513'},
+                'x': 0.5,
+                'xanchor': 'center'
+            },
+            polar=dict(
+                bgcolor="rgba(240, 240, 240, 0.3)",
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 90],
+                    showticklabels=True,
+                    ticks="outside",
+                    tickfont=dict(size=10),
+                    gridcolor="rgba(128, 128, 128, 0.2)",
+                    tickvals=[0, 15, 30, 45, 60, 75, 90],
+                    ticktext=["90° (Zenith)", "75°", "60°", "45°", "30°", "15°", "0° (Horizon)"],
+                ),
+                angularaxis=dict(
+                    tickfont=dict(size=11),
+                    rotation=90,
+                    direction="clockwise",
+                    gridcolor="rgba(128, 128, 128, 0.3)",
+                    tickvals=[0, 45, 90, 135, 180, 225, 270, 315],
+                    ticktext=["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+                ),
+            ),
+            showlegend=True,
+            legend=dict(
+                x=0.02,
+                y=0.98,
+                bgcolor="rgba(255, 255, 255, 0.9)",
+                bordercolor="black",
+                borderwidth=1,
+                font=dict(size=10)
+            ),
+            hovermode="closest",
+            height=700,
+            margin=dict(l=80, r=100, t=100, b=80),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            font=dict(family="Arial, sans-serif", size=12, color="black")
         )
         
-        # Adjust layout to prevent label cutoff
-        plt.tight_layout()
-        
-        # Display in Streamlit
-        st.pyplot(fig)
-        plt.close(fig)
+        # Display with Streamlit
+        st.plotly_chart(fig, use_container_width=True)
         
     except Exception as e:
         st.error(f"Error generating Sun Path Diagram: {str(e)}")
