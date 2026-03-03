@@ -772,7 +772,8 @@ def parse_epw(epw_text: str) -> tuple:
     df_raw = pd.read_csv(io.StringIO(data_str), header=None)
     
     # EPW standard columns (0-based index):
-    # 0=year,1=month,2=day,3=hour,4=minute,5=data source,6=dry bulb (C),7=dew point,8=relative humidity (%)
+    # 0=year,1=month,2=day,3=hour,4=minute,5=data source,6=dry bulb (C),7=dew point,8=relative humidity (%),
+    # 14=direct_normal_irradiance (Wh/m²), 15=diffuse_horizontal_irradiance (Wh/m²)
     col_map = {
         "year": 0,
         "month": 1,
@@ -781,6 +782,7 @@ def parse_epw(epw_text: str) -> tuple:
         "minute": 4,
         "dry_bulb_temperature": 6,
         "relative_humidity": 8,
+        "direct_normal_irradiance": 14,
     }
     
     # safety: ensure DataFrame has enough columns
@@ -800,6 +802,7 @@ def parse_epw(epw_text: str) -> tuple:
     
     df["dry_bulb_temperature"] = pd.to_numeric(df_raw.iloc[:, col_map["dry_bulb_temperature"]], errors="coerce")
     df["relative_humidity"] = pd.to_numeric(df_raw.iloc[:, col_map["relative_humidity"]], errors="coerce")
+    df["direct_normal_irradiance"] = pd.to_numeric(df_raw.iloc[:, col_map["direct_normal_irradiance"]], errors="coerce")
     
     # build datetime (note: this may produce NaT for invalid rows)
     df["datetime"] = pd.to_datetime(
@@ -808,15 +811,16 @@ def parse_epw(epw_text: str) -> tuple:
     )
     
     df = df.dropna(subset=["datetime"]).reset_index(drop=True)
-    return df[["datetime", "dry_bulb_temperature", "relative_humidity", "hour"]], metadata
+    return df[["datetime", "dry_bulb_temperature", "relative_humidity", "direct_normal_irradiance", "hour"]], metadata
 
 
-def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
+def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> None:
     """Generate and display an interactive Sun Path Diagram using Plotly.
     
     Args:
         data: DataFrame with datetime and weather data
         metadata: Dictionary containing latitude, longitude, timezone
+        chart_type: Type of chart to display - "Direct Normal Radiation", "Dry Bulb Temperature", or "Analemma"
     """
     try:
         from pvlib import solarposition
@@ -873,49 +877,147 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
         solpos["r"] = 90 - solpos["apparent_elevation"]
         solpos["theta"] = solpos["azimuth"]
         
+        # Merge with EPW data to get temperature and radiation
+        # First, make EPW data timezone-aware to match solpos
+        epw_data = data.set_index("datetime")
+        if epw_data.index.tz is None:
+            epw_data.index = epw_data.index.tz_localize(tz)
+        else:
+            epw_data.index = epw_data.index.tz_convert(tz)
+        
+        # Normalize EPW data to use 2020 as the year (to match solpos calculations)
+        # This allows proper merging by month/day/hour
+        epw_data.index = epw_data.index.map(lambda x: x.replace(year=2020))
+        
+        solpos_merged = solpos.copy()
+        solpos_merged = solpos_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance"]], how="left")
+        
         # Create figure
         fig = go.Figure()
+        
+        # Determine color scale and colorbar title based on chart type
+        if chart_type == "Direct Normal Radiation":
+            color_data = solpos_merged.get("direct_normal_irradiance", pd.Series(0, index=solpos_merged.index))
+            color_data = color_data.fillna(0)
+            colorscale = "YlOrRd"  # Yellow-Orange-Red
+            colorbar_title = "DNR (Wh/m²)"
+            colorbar_min = 0
+            colorbar_max = 1000
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "DNR: %{customdata[5]:.0f} Wh/m²"
+                "<extra></extra>"
+            )
+        elif chart_type == "Dry Bulb Temperature":
+            color_data = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index))
+            color_data = color_data.fillna(20)
+            colorscale = "Viridis"  # Blue-Purple-Red-Yellow
+            colorbar_title = "Temperature (°C)"
+            colorbar_min = 10
+            colorbar_max = 45
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "Temperature: %{customdata[5]:.1f}°C"
+                "<extra></extra>"
+            )
+        else:  # Sun Path - color by day of year
+            color_data = solpos_merged.index.dayofyear
+            colorscale = "Twilight_r"
+            colorbar_title = "Day of Year"
+            colorbar_min = 1
+            colorbar_max = 365
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°"
+                "<extra></extra>"
+            )
         
         # ========================
         # Add analemma curves (one per hour of day)
         # ========================
         for hour in range(24):
-            subset = solpos[solpos.index.hour == hour]
+            subset_idx = solpos_merged.index.hour == hour
+            subset = solpos_merged[subset_idx]
+            subset_colors = color_data[subset_idx]
             
-            if subset.empty:
+            if len(subset) == 0:
                 continue
             
             # Format hover text components
             month_names = subset.index.strftime("%B")
             hour_formatted = subset.index.strftime("%I:00 %p")
+            temp_values = subset.get("dry_bulb_temperature", pd.Series(np.nan, index=subset.index))
+            dnr_values = subset.get("direct_normal_irradiance", pd.Series(np.nan, index=subset.index))
             
-            customdata = np.stack(
-                (
-                    month_names,
-                    subset.index.day,
-                    hour_formatted,
-                    subset["apparent_elevation"],
-                    subset["azimuth"],
-                ),
-                axis=-1,
-            )
+            if chart_type == "Direct Normal Radiation":
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        dnr_values.fillna(0),
+                    ),
+                    axis=-1,
+                )
+            elif chart_type == "Dry Bulb Temperature":
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        temp_values.fillna(20),
+                    ),
+                    axis=-1,
+                )
+            else:  # Sun Path - only position data
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                    ),
+                    axis=-1,
+                )
             
             fig.add_trace(
                 go.Scatterpolar(
                     r=subset["r"],
                     theta=subset["theta"],
                     mode="lines+markers",
-                    marker=dict(size=4, color="rgba(0, 100, 200, 0.6)"),
-                    line=dict(width=1, color="rgba(0, 100, 200, 0.5)"),
+                    marker=dict(
+                        size=4,
+                        color=subset_colors.values,
+                        colorscale=colorscale,
+                        cmin=colorbar_min,
+                        cmax=colorbar_max,
+                        showscale=(hour == 0),  # Only show colorbar on first trace
+                        colorbar=dict(
+                            title=colorbar_title,
+                            thickness=20,
+                            len=0.7,
+                            x=1.1
+                        ),
+                        opacity=0.7,
+                        line=dict(width=0.5)
+                    ),
+                    line=dict(width=1, color="rgba(100, 100, 100, 0.3)"),
                     showlegend=False,
                     customdata=customdata,
-                    hovertemplate=(
-                        "<b>%{customdata[0]} %{customdata[1]}</b><br>"
-                        "Time: %{customdata[2]}<br>"
-                        "Altitude: %{customdata[3]:.1f}°<br>"
-                        "Azimuth: %{customdata[4]:.1f}°"
-                        "<extra></extra>"
-                    ),
+                    hovertemplate=hover_template,
                 )
             )
         
@@ -944,8 +1046,42 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
             if sol.empty:
                 continue
             
+            # Add EPW data to special date curves
+            sol_merged = sol.copy()
+            sol_merged = sol_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance"]], how="left")
+            
             r = 90 - sol["apparent_elevation"]
             theta = sol["azimuth"]
+            temp = sol_merged.get("dry_bulb_temperature", pd.Series(np.nan, index=sol_merged.index))
+            dnr = sol_merged.get("direct_normal_irradiance", pd.Series(np.nan, index=sol_merged.index))
+            
+            # Build customdata and hovertemplate based on chart type
+            if chart_type == "Direct Normal Radiation":
+                special_customdata = np.stack((sol["apparent_elevation"], dnr.fillna(0)), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "DNR: %{customdata[1]:.0f} Wh/m²"
+                    "<extra></extra>"
+                )
+            elif chart_type == "Dry Bulb Temperature":
+                special_customdata = np.stack((sol["apparent_elevation"], temp.fillna(20)), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "Temperature: %{customdata[1]:.1f}°C"
+                    "<extra></extra>"
+                )
+            else:  # Sun Path
+                special_customdata = np.stack((sol["apparent_elevation"],), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°"
+                    "<extra></extra>"
+                )
             
             fig.add_trace(
                 go.Scatterpolar(
@@ -955,13 +1091,8 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
                     line=dict(width=3, color=color),
                     name=label,
                     showlegend=True,
-                    hovertemplate=(
-                        f"<b>{label}</b><br>"
-                        "Altitude: %{customdata[0]:.1f}°<br>"
-                        "Azimuth: %{theta:.1f}°"
-                        "<extra></extra>"
-                    ),
-                    customdata=np.stack((sol["apparent_elevation"],), axis=-1),
+                    hovertemplate=special_hovertemplate,
+                    customdata=special_customdata,
                 )
             )
         
@@ -970,7 +1101,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
         # ========================
         fig.update_layout(
             title={
-                'text': '☀️ Sun Path Diagram',
+                'text': f'☀️ Sun Path - {chart_type}',
                 'font': {'size': 24, 'color': '#8B4513'},
                 'x': 0.5,
                 'xanchor': 'center'
@@ -1007,7 +1138,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict) -> None:
             ),
             hovermode="closest",
             height=700,
-            margin=dict(l=80, r=100, t=100, b=80),
+            margin=dict(l=80, r=140, t=100, b=80),
             plot_bgcolor="white",
             paper_bgcolor="white",
             font=dict(family="Arial, sans-serif", size=12, color="black")
@@ -1240,7 +1371,16 @@ with col_right:
     # Check if Sun Path is selected - show it directly without tabs
     if selected_parameter == "Sun Path":
         st.markdown("<h3 style='text-align: left; margin-top: 20px;'>☀️ Sun Path Analysis</h3>", unsafe_allow_html=True)
-        plot_sun_path(df, metadata)
+        
+        # Add dropdown to select chart type
+        col_selector = st.columns([1, 4])
+        with col_selector[0]:
+            chart_type = st.selectbox(
+                "Chart Type:",
+            ["Direct Normal Radiation", "Dry Bulb Temperature", "Sun Path"],
+            )
+        
+        plot_sun_path(df, metadata, chart_type)
     else:
                 # Create tab buttons
         tabs_col1, tabs_col2, tabs_col3, tabs_col4, tabs_col5 = st.columns(5, gap="small")
