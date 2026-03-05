@@ -783,6 +783,7 @@ def parse_epw(epw_text: str) -> tuple:
         "dry_bulb_temperature": 6,
         "relative_humidity": 8,
         "direct_normal_irradiance": 14,
+        "diffuse_horizontal_irradiance": 15,
     }
     
     # safety: ensure DataFrame has enough columns
@@ -803,6 +804,10 @@ def parse_epw(epw_text: str) -> tuple:
     df["dry_bulb_temperature"] = pd.to_numeric(df_raw.iloc[:, col_map["dry_bulb_temperature"]], errors="coerce")
     df["relative_humidity"] = pd.to_numeric(df_raw.iloc[:, col_map["relative_humidity"]], errors="coerce")
     df["direct_normal_irradiance"] = pd.to_numeric(df_raw.iloc[:, col_map["direct_normal_irradiance"]], errors="coerce")
+    df["diffuse_horizontal_irradiance"] = pd.to_numeric(df_raw.iloc[:, col_map["diffuse_horizontal_irradiance"]], errors="coerce").fillna(0)
+    # Global horizontal irradiance = diffuse horizontal irradiance (simplified, as we don't have solar geometry data here)
+    # In precise calculations, GHI = DNI * sin(altitude) + DHI, but we use DHI as approximation
+    df["global_horizontal_irradiance"] = df["diffuse_horizontal_irradiance"]
     
     # build datetime (note: this may produce NaT for invalid rows)
     df["datetime"] = pd.to_datetime(
@@ -811,7 +816,7 @@ def parse_epw(epw_text: str) -> tuple:
     )
     
     df = df.dropna(subset=["datetime"]).reset_index(drop=True)
-    return df[["datetime", "dry_bulb_temperature", "relative_humidity", "direct_normal_irradiance", "hour"]], metadata
+    return df[["datetime", "dry_bulb_temperature", "relative_humidity", "direct_normal_irradiance", "diffuse_horizontal_irradiance", "global_horizontal_irradiance", "hour"]], metadata
 
 
 def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> None:
@@ -820,7 +825,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
     Args:
         data: DataFrame with datetime and weather data
         metadata: Dictionary containing latitude, longitude, timezone
-        chart_type: Type of chart to display - "Direct Normal Radiation", "Dry Bulb Temperature", or "Analemma"
+        chart_type: Type of chart to display - "Direct Normal Radiation", "Global Horizontal Radiation", "Dry Bulb Temperature", or "Sun Path"
     """
     try:
         from pvlib import solarposition
@@ -890,7 +895,16 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         epw_data.index = epw_data.index.map(lambda x: x.replace(year=2020))
         
         solpos_merged = solpos.copy()
-        solpos_merged = solpos_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance"]], how="left")
+        solpos_merged = solpos_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"]], how="left")
+        
+        # Calculate Global Horizontal Irradiance (GHI) from DNI and DHI using solar altitude angle
+        # GHI = DNI * sin(altitude) + DHI
+        altitude_rad = np.radians(solpos_merged["apparent_elevation"])
+        dni = solpos_merged["direct_normal_irradiance"].fillna(0)
+        dhi = solpos_merged["diffuse_horizontal_irradiance"].fillna(0)
+        solpos_merged["global_horizontal_irradiance"] = (
+            np.maximum(0, np.sin(altitude_rad)) * dni + dhi
+        )
         
         # Create figure
         fig = go.Figure()
@@ -913,6 +927,24 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                 "Altitude: %{customdata[3]:.1f}°<br>"
                 "Azimuth: %{customdata[4]:.1f}°<br>"
                 "DNR: %{customdata[5]:.0f} Wh/m²"
+                "<extra></extra>"
+            )
+        elif chart_type == "Global Horizontal Radiation":
+            color_data = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index))
+            color_data = color_data.fillna(0)
+            colorscale = "YlOrRd"  # Yellow-Orange-Red
+            colorbar_title = "GHR (Wh/m²)"
+            colorbar_min = 0
+            colorbar_max = 1200
+            # Ticks: 0, 200, 400, 600, 800, 1000, 1200
+            tickvals = [0, 200, 400, 600, 800, 1000, 1200]
+            ticktext = ["0", "200", "400", "600", "800", "1000", "1200"]
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "GHR: %{customdata[5]:.0f} Wh/m²"
                 "<extra></extra>"
             )
         elif chart_type == "Dry Bulb Temperature":
@@ -967,6 +999,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             hour_formatted = subset.index.strftime("%I:00 %p")
             temp_values = subset.get("dry_bulb_temperature", pd.Series(np.nan, index=subset.index))
             dnr_values = subset.get("direct_normal_irradiance", pd.Series(np.nan, index=subset.index))
+            ghr_values = subset.get("global_horizontal_irradiance", pd.Series(np.nan, index=subset.index))
             
             if chart_type == "Direct Normal Radiation":
                 customdata = np.stack(
@@ -977,6 +1010,18 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                         subset["apparent_elevation"],
                         subset["azimuth"],
                         dnr_values.fillna(0),
+                    ),
+                    axis=-1,
+                )
+            elif chart_type == "Global Horizontal Radiation":
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        ghr_values.fillna(0),
                     ),
                     axis=-1,
                 )
@@ -1067,7 +1112,15 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             
             # Add EPW data to special date curves
             sol_merged = sol.copy()
-            sol_merged = sol_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance"]], how="left")
+            sol_merged = sol_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"]], how="left")
+            
+            # Calculate Global Horizontal Irradiance for special dates
+            altitude_rad = np.radians(sol_merged["apparent_elevation"])
+            dni = sol_merged["direct_normal_irradiance"].fillna(0)
+            dhi = sol_merged["diffuse_horizontal_irradiance"].fillna(0)
+            sol_merged["global_horizontal_irradiance"] = (
+                np.maximum(0, np.sin(altitude_rad)) * dni + dhi
+            )
             
             r = 90 - sol["apparent_elevation"]
             theta = sol["azimuth"]
@@ -1118,6 +1171,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             dnr = sol_merged.get("direct_normal_irradiance", pd.Series(np.nan, index=sol_merged.index))
             
             # Build customdata and hovertemplate based on chart type
+            ghr = sol_merged.get("global_horizontal_irradiance", pd.Series(np.nan, index=sol_merged.index))
             if chart_type == "Direct Normal Radiation":
                 special_customdata = np.stack((sol["apparent_elevation"], dnr.fillna(0)), axis=-1)
                 special_hovertemplate = (
@@ -1125,6 +1179,15 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                     "Altitude: %{customdata[0]:.1f}°<br>"
                     "Azimuth: %{theta:.1f}°<br>"
                     "DNR: %{customdata[1]:.0f} Wh/m²"
+                    "<extra></extra>"
+                )
+            elif chart_type == "Global Horizontal Radiation":
+                special_customdata = np.stack((sol["apparent_elevation"], ghr.fillna(0)), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "GHR: %{customdata[1]:.0f} Wh/m²"
                     "<extra></extra>"
                 )
             elif chart_type == "Dry Bulb Temperature":
@@ -1463,7 +1526,7 @@ with col_right:
         with col_selector[0]:
             chart_type = st.selectbox(
                 "Chart Type:",
-            ["Direct Normal Radiation", "Dry Bulb Temperature", "Sun Path"],
+            ["Direct Normal Radiation", "Global Horizontal Radiation", "Dry Bulb Temperature", "Sun Path"],
             )
         
         plot_sun_path(df, metadata, chart_type)
