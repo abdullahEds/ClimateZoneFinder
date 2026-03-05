@@ -1111,12 +1111,14 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                 radialaxis=dict(
                     visible=True,
                     range=[0, 90],
-                    showticklabels=True,
-                    ticks="outside",
-                    tickfont=dict(size=10),
+                    showticklabels=False,
+                    showline=False,
+                    ticks="", 
+                    # ticks="outside",
+                    # tickfont=dict(size=10),
                     gridcolor="rgba(128, 128, 128, 0.2)",
-                    tickvals=[0, 15, 30, 45, 60, 75, 90],
-                    ticktext=["90° (Zenith)", "75°", "60°", "45°", "30°", "15°", "0° (Horizon)"],
+                    # tickvals=[0, 15, 30, 45, 60, 75, 90],
+                    # ticktext=["90° (Zenith)", "75°", "60°", "45°", "30°", "15°", "0° (Horizon)"],
                 ),
                 angularaxis=dict(
                     tickfont=dict(size=11),
@@ -1127,6 +1129,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                     ticktext=["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
                 ),
             ),
+            
             showlegend=True,
             legend=dict(
                 x=0.02,
@@ -1143,6 +1146,27 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             paper_bgcolor="white",
             font=dict(family="Arial, sans-serif", size=12, color="black")
         )
+        fig.add_trace(
+        go.Scatterpolar(
+            r=[0, 15, 30, 45, 60, 75, 90],
+            theta=[45]*7,   # NE direction
+            mode="lines+text",
+            line=dict(color="black", width=1),
+            text=[
+                "90° (Zenith)",
+                "75°",
+                "60°",
+                "45°",
+                "30°",
+                "15°",
+                "0° (Horizon)"
+            ],
+            textposition="middle right",
+            textfont=dict(size=10),
+            showlegend=False,
+            hoverinfo="skip"
+        )
+    )
         
         # Display with Streamlit
         st.plotly_chart(fig, use_container_width=True)
