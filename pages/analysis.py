@@ -965,6 +965,28 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                 "Temperature: %{customdata[5]:.1f}°C"
                 "<extra></extra>"
             )
+        elif chart_type == "Shading":
+            ghi = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
+            temp = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index)).fillna(20)
+            # Boolean: 1 = shading needed, 0 = no shading needed
+            shading_needed = ((temp > 28) & (ghi > 315)).astype(int)
+            color_data = shading_needed
+            colorscale = [[0, "#FFF9C4"], [1, "#E65100"]]  # pale yellow -> deep orange
+            colorbar_title = "Shading Need"
+            colorbar_min = 0
+            colorbar_max = 1
+            tickvals = [0, 1]
+            ticktext = ["No Shading", "Shading Required"]
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "Temp: %{customdata[5]:.1f}°C<br>"
+                "GHI: %{customdata[6]:.0f} Wh/m²<br>"
+                "Shading: %{customdata[7]}"
+                "<extra></extra>"
+            )
         else:  # Sun Path - color by day of year
             color_data = solpos_merged.index.dayofyear
             colorscale = "YlOrRd"  # Use same colorscale as DNR
@@ -1037,6 +1059,25 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                     ),
                     axis=-1,
                 )
+            elif chart_type == "Shading":
+                shading_temp = subset.get("dry_bulb_temperature", pd.Series(np.nan, index=subset.index)).fillna(20)
+                shading_ghi = subset.get("global_horizontal_irradiance", pd.Series(np.nan, index=subset.index)).fillna(0)
+                shading_labels = np.where(
+                    (shading_temp > 28) & (shading_ghi > 315), "Required", "Not Required"
+                )
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        shading_temp,
+                        shading_ghi,
+                        shading_labels,
+                    ),
+                    axis=-1,
+                )
             else:  # Sun Path - only position data
                 customdata = np.stack(
                     (
@@ -1084,6 +1125,73 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                 )
             )
             first_trace = False  # Only show colorbar on first trace
+        
+        # ========================
+        # Shading region highlight
+        # ========================
+        if chart_type == "Shading":
+            # Collect all points that require shading (temp > 28°C AND GHI > 315 Wh/m²)
+            ghi_col = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
+            temp_col = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index)).fillna(20)
+            shading_mask = (temp_col > 28) & (ghi_col > 315)
+            shade_points = solpos_merged[shading_mask]
+
+            if not shade_points.empty:
+                # Compute summer solstice path to use as upper boundary cap
+                # (shading region must not extend above the summer solstice arc)
+                summer_date = pd.Timestamp("2020-06-21")
+                summer_times = pd.date_range(
+                    summer_date, summer_date + pd.Timedelta("1D"),
+                    freq="5min", tz=tz, inclusive="left"
+                )
+                summer_sol = solarposition.get_solarposition(summer_times, lat, lon)
+                summer_sol = summer_sol[summer_sol["apparent_elevation"] > 0]
+                summer_sol["r_summer"] = 90 - summer_sol["apparent_elevation"]
+
+                # Per-azimuth binning with a wide window (±9°) to bridge gaps between
+                # hour columns (~15–20° apart) without creating separate blobs.
+                az_step = 2
+                half_w = 9
+                az_bins = np.arange(0, 360, az_step)
+
+                out_az, out_r_outer, out_r_inner = [], [], []
+                for az in az_bins:
+                    shade_near = shade_points[
+                        (shade_points["azimuth"] >= az - half_w) &
+                        (shade_points["azimuth"] < az + half_w)
+                    ]
+                    if shade_near.empty:
+                        continue
+                    summer_near = summer_sol[
+                        (summer_sol["azimuth"] >= az - half_w) &
+                        (summer_sol["azimuth"] < az + half_w)
+                    ]
+                    r_outer = shade_near["r"].max()   # lowest altitude  = outermost edge
+                    r_inner = shade_near["r"].min()   # highest altitude = innermost edge
+                    # Cap inner edge at summer solstice so region stays below the arc
+                    if not summer_near.empty:
+                        r_inner = max(r_inner, summer_near["r_summer"].min())
+                    out_az.append(az)
+                    out_r_outer.append(r_outer)
+                    out_r_inner.append(r_inner)
+
+                if out_az:
+                    region_az = out_az + out_az[::-1] + [out_az[0]]
+                    region_r = out_r_outer + out_r_inner[::-1] + [out_r_outer[0]]
+
+                    fig.add_trace(
+                        go.Scatterpolar(
+                            r=region_r,
+                            theta=region_az,
+                            mode="lines",
+                            fill="toself",
+                            fillcolor="rgba(230, 81, 0, 0.18)",
+                            line=dict(color="rgba(230, 81, 0, 0.45)", width=1.2),
+                            name="Shading Required Zone",
+                            showlegend=True,
+                            hoverinfo="skip",
+                        )
+                    )
         
         # ========================
         # Add special solar dates (equinoxes and solstices)
@@ -1197,6 +1305,17 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                     "Altitude: %{customdata[0]:.1f}°<br>"
                     "Azimuth: %{theta:.1f}°<br>"
                     "Temperature: %{customdata[1]:.1f}°C"
+                    "<extra></extra>"
+                )
+            elif chart_type == "Shading":
+                s_ghi = sol_merged.get("global_horizontal_irradiance", pd.Series(np.nan, index=sol_merged.index)).fillna(0)
+                special_customdata = np.stack((sol["apparent_elevation"], temp.fillna(20), s_ghi), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "Temp: %{customdata[1]:.1f}°C<br>"
+                    "GHI: %{customdata[2]:.0f} Wh/m²"
                     "<extra></extra>"
                 )
             else:  # Sun Path
@@ -1526,7 +1645,7 @@ with col_right:
         with col_selector[0]:
             chart_type = st.selectbox(
                 "Chart Type:",
-            ["Direct Normal Radiation", "Global Horizontal Radiation", "Dry Bulb Temperature", "Sun Path"],
+            ["Sun Path","Dry Bulb Temperature", "Direct Normal Radiation", "Global Horizontal Radiation","Shading"],
             )
         
         plot_sun_path(df, metadata, chart_type)
