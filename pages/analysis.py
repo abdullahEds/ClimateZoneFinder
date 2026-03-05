@@ -1071,6 +1071,49 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             
             r = 90 - sol["apparent_elevation"]
             theta = sol["azimuth"]
+            # draw the key date curve
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=r,
+                    theta=theta,
+                    mode="lines",
+                    line=dict(width=0.8, color=color),
+                    name=label,
+                    showlegend=True
+                )
+            )
+
+            # =========================
+            # Add hour labels on Summer curve
+            # =========================
+            if label == "Jun 21 (Summer)":
+
+                hour_labels = [6, 9, 12, 15, 18]
+
+                label_times = [
+                    pd.Timestamp(date_str).tz_localize(tz) + pd.Timedelta(hours=h)
+                    for h in hour_labels
+                ]
+
+                label_sol = solarposition.get_solarposition(label_times, lat, lon)
+                label_sol = label_sol[label_sol["apparent_elevation"] > 0]
+
+                if not label_sol.empty:
+
+                    r_labels = 90 - label_sol["apparent_elevation"]
+                    theta_labels = label_sol["azimuth"]
+
+                    fig.add_trace(
+                        go.Scatterpolar(
+                            r=r_labels,
+                            theta=theta_labels,
+                            mode="text",
+                            text=[str(h) for h in hour_labels],
+                            textfont=dict(size=11, color="black"),
+                            showlegend=False,
+                            hoverinfo="skip"
+                        )
+                    )
             temp = sol_merged.get("dry_bulb_temperature", pd.Series(np.nan, index=sol_merged.index))
             dnr = sol_merged.get("direct_normal_irradiance", pd.Series(np.nan, index=sol_merged.index))
             
@@ -1102,18 +1145,18 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                     "<extra></extra>"
                 )
             
-            fig.add_trace(
-                go.Scatterpolar(
-                    r=r,
-                    theta=theta,
-                    mode="lines",
-                    line=dict(width=3, color=color),
-                    name=label,
-                    showlegend=True,
-                    hovertemplate=special_hovertemplate,
-                    customdata=special_customdata,
-                )
-            )
+            # fig.add_trace(
+            #     go.Scatterpolar(
+            #         r=r,
+            #         theta=theta,
+            #         mode="lines",
+            #         line=dict(width=3, color=color),
+            #         name=label,
+            #         showlegend=True,
+            #         hovertemplate=special_hovertemplate,
+            #         customdata=special_customdata,
+            #     )
+            # )
         
         # ========================
         # Configure polar layout
