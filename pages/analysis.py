@@ -896,6 +896,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         fig = go.Figure()
         
         # Determine color scale and colorbar title based on chart type
+        # All charts use YlOrRd colorscale for consistency with DNR chart
         if chart_type == "Direct Normal Radiation":
             color_data = solpos_merged.get("direct_normal_irradiance", pd.Series(0, index=solpos_merged.index))
             color_data = color_data.fillna(0)
@@ -903,6 +904,9 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             colorbar_title = "DNR (Wh/m²)"
             colorbar_min = 0
             colorbar_max = 1000
+            # Ticks: 0, 200, 400, 600, 800, 1000
+            tickvals = [0, 200, 400, 600, 800, 1000]
+            ticktext = ["0", "200", "400", "600", "800", "1000"]
             hover_template = (
                 "<b>%{customdata[0]} %{customdata[1]}</b><br>"
                 "Time: %{customdata[2]}<br>"
@@ -914,10 +918,13 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         elif chart_type == "Dry Bulb Temperature":
             color_data = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index))
             color_data = color_data.fillna(20)
-            colorscale = "Viridis"  # Blue-Purple-Red-Yellow
+            colorscale = "YlOrRd"  # Use same colorscale as DNR
             colorbar_title = "Temperature (°C)"
-            colorbar_min = 10
-            colorbar_max = 45
+            colorbar_min = 5
+            colorbar_max = 40
+            # Ticks: 5, 10, 15, 20, 25, 30, 35, 40
+            tickvals = [5, 10, 15, 20, 25, 30, 35, 40]
+            ticktext = ["5", "10", "15", "20", "25", "30", "35", "40"]
             hover_template = (
                 "<b>%{customdata[0]} %{customdata[1]}</b><br>"
                 "Time: %{customdata[2]}<br>"
@@ -928,10 +935,13 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             )
         else:  # Sun Path - color by day of year
             color_data = solpos_merged.index.dayofyear
-            colorscale = "Twilight_r"
+            colorscale = "YlOrRd"  # Use same colorscale as DNR
             colorbar_title = "Day of Year"
             colorbar_min = 1
             colorbar_max = 365
+            # Ticks: 1, 91, 182, 273, 365 (approx quarterly)
+            tickvals = [1, 91, 182, 273, 365]
+            ticktext = ["1", "91", "182", "273", "365"]
             hover_template = (
                 "<b>%{customdata[0]} %{customdata[1]}</b><br>"
                 "Time: %{customdata[2]}<br>"
@@ -943,6 +953,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         # ========================
         # Add analemma curves (one per hour of day)
         # ========================
+        first_trace = True  # Track first trace to show colorbar
         for hour in range(24):
             subset_idx = solpos_merged.index.hour == hour
             subset = solpos_merged[subset_idx]
@@ -1004,12 +1015,19 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                         colorscale=colorscale,
                         cmin=colorbar_min,
                         cmax=colorbar_max,
-                        showscale=(hour == 0),  # Only show colorbar on first trace
+                        showscale=first_trace,  # Display colorbar on first trace with data
                         colorbar=dict(
-                            title=colorbar_title,
+                            title=dict(
+                                text=colorbar_title,
+                                side="right",
+                                font=dict(size=12, color="#333"),
+                            ),
                             thickness=20,
                             len=0.7,
-                            x=1.1
+                            x=1.1,
+                            tickvals=tickvals,
+                            ticktext=ticktext,
+                            tickmode="array"
                         ),
                         opacity=0.7,
                         line=dict(width=0.5)
@@ -1020,6 +1038,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                     hovertemplate=hover_template,
                 )
             )
+            first_trace = False  # Only show colorbar on first trace
         
         # ========================
         # Add special solar dates (equinoxes and solstices)
