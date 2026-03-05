@@ -1100,12 +1100,12 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         # Configure polar layout
         # ========================
         fig.update_layout(
-            title={
-                'text': f'☀️ Sun Path - {chart_type}',
-                'font': {'size': 24, 'color': '#8B4513'},
-                'x': 0.5,
-                'xanchor': 'center'
-            },
+            # title={
+            #     'text': f'☀️ Sun Path - {chart_type}',
+            #     'font': {'size': 24, 'color': '#8B4513'},
+            #     'x': 0.5,
+            #     'xanchor': 'center'
+            # },
             polar=dict(
                 bgcolor="rgba(240, 240, 240, 0.3)",
                 radialaxis=dict(
@@ -1394,7 +1394,7 @@ with col_right:
     
     # Check if Sun Path is selected - show it directly without tabs
     if selected_parameter == "Sun Path":
-        st.markdown("<h3 style='text-align: left; margin-top: 20px;'>☀️ Sun Path Analysis</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: left; margin-top: 20px;'>Sun Path Analysis</h3>", unsafe_allow_html=True)
         
         # Add dropdown to select chart type
         col_selector = st.columns([1, 4])
