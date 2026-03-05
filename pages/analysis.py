@@ -2,13 +2,14 @@ import streamlit as st
 import base64
 import pandas as pd
 import plotly.express as px
+import numpy as np
 import io
 import re
+import pytz
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from pptx.dml.color import RGBColor
-import io
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import tempfile
@@ -710,10 +711,52 @@ Relative Humidity:
     
     return report_bytes
 
-def parse_epw(epw_text: str) -> pd.DataFrame:
-    """Parse EPW formatted text and return a DataFrame with datetime, dry_bulb_temperature, relative_humidity."""
+def convert_epw_timezone(tz_offset):
+    """Convert EPW numeric timezone to valid pytz timezone string."""
+    # Common mappings for EPW numeric timezone offsets
+    tz_map = {
+        5.5: "Asia/Kolkata",
+        0: "UTC",
+        -5: "Etc/GMT+5",
+        -6: "Etc/GMT+6",
+        -7: "Etc/GMT+7",
+        -8: "Etc/GMT+8",
+        1: "Europe/London",
+        2: "Europe/Paris",
+    }
+    try:
+        tz_float = float(tz_offset)
+        if tz_float in tz_map:
+            return tz_map[tz_float]
+    except (ValueError, TypeError):
+        pass
+    return "UTC"
+
+
+def parse_epw(epw_text: str) -> tuple:
+    """Parse EPW formatted text and return a tuple of (DataFrame, metadata).
+    
+    Returns:
+        tuple: (df, metadata) where df has datetime, dry_bulb_temperature, relative_humidity, hour
+               and metadata contains latitude, longitude, timezone
+    """
     # split into lines and find first data row (starts with a year integer)
     lines = [ln.strip() for ln in epw_text.splitlines() if ln.strip() != ""]
+    # Extract metadata from header (first line)
+    metadata = {"latitude": None, "longitude": None, "timezone": "UTC"}
+    if len(lines) > 0:
+        header = lines[0].split(",")
+        try:
+            # EPW header format: LOCATION,CITY,STATE,COUNTRY,DATA SOURCE,WMO STATION #,LATITUDE,LONGITUDE,TIMEZONE,ELEVATION
+            # Column indices:      0        1     2     3       4           5              6         7          8        9
+            if len(header) >= 8:
+                metadata["latitude"] = float(header[6].strip())
+                metadata["longitude"] = float(header[7].strip())
+            if len(header) >= 9:
+                metadata["timezone"] = convert_epw_timezone(header[8].strip())
+        except (ValueError, IndexError, TypeError):
+            pass
+    
     data_start = None
     for i, ln in enumerate(lines):
         # consider a line a data line if first token is a 4-digit year
@@ -729,7 +772,8 @@ def parse_epw(epw_text: str) -> pd.DataFrame:
     df_raw = pd.read_csv(io.StringIO(data_str), header=None)
     
     # EPW standard columns (0-based index):
-    # 0=year,1=month,2=day,3=hour,4=minute,5=data source,6=dry bulb (C),7=dew point,8=relative humidity (%)
+    # 0=year,1=month,2=day,3=hour,4=minute,5=data source,6=dry bulb (C),7=dew point,8=relative humidity (%),
+    # 14=direct_normal_irradiance (Wh/m²), 15=diffuse_horizontal_irradiance (Wh/m²)
     col_map = {
         "year": 0,
         "month": 1,
@@ -738,6 +782,8 @@ def parse_epw(epw_text: str) -> pd.DataFrame:
         "minute": 4,
         "dry_bulb_temperature": 6,
         "relative_humidity": 8,
+        "direct_normal_irradiance": 14,
+        "diffuse_horizontal_irradiance": 15,
     }
     
     # safety: ensure DataFrame has enough columns
@@ -757,6 +803,11 @@ def parse_epw(epw_text: str) -> pd.DataFrame:
     
     df["dry_bulb_temperature"] = pd.to_numeric(df_raw.iloc[:, col_map["dry_bulb_temperature"]], errors="coerce")
     df["relative_humidity"] = pd.to_numeric(df_raw.iloc[:, col_map["relative_humidity"]], errors="coerce")
+    df["direct_normal_irradiance"] = pd.to_numeric(df_raw.iloc[:, col_map["direct_normal_irradiance"]], errors="coerce")
+    df["diffuse_horizontal_irradiance"] = pd.to_numeric(df_raw.iloc[:, col_map["diffuse_horizontal_irradiance"]], errors="coerce").fillna(0)
+    # Global horizontal irradiance = diffuse horizontal irradiance (simplified, as we don't have solar geometry data here)
+    # In precise calculations, GHI = DNI * sin(altitude) + DHI, but we use DHI as approximation
+    df["global_horizontal_irradiance"] = df["diffuse_horizontal_irradiance"]
     
     # build datetime (note: this may produce NaT for invalid rows)
     df["datetime"] = pd.to_datetime(
@@ -765,7 +816,607 @@ def parse_epw(epw_text: str) -> pd.DataFrame:
     )
     
     df = df.dropna(subset=["datetime"]).reset_index(drop=True)
-    return df[["datetime", "dry_bulb_temperature", "relative_humidity", "hour"]]
+    return df[["datetime", "dry_bulb_temperature", "relative_humidity", "direct_normal_irradiance", "diffuse_horizontal_irradiance", "global_horizontal_irradiance", "hour"]], metadata
+
+
+def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> None:
+    """Generate and display an interactive Sun Path Diagram using Plotly.
+    
+    Args:
+        data: DataFrame with datetime and weather data
+        metadata: Dictionary containing latitude, longitude, timezone
+        chart_type: Type of chart to display - "Direct Normal Radiation", "Global Horizontal Radiation", "Dry Bulb Temperature", or "Sun Path"
+    """
+    try:
+        from pvlib import solarposition
+        import plotly.graph_objects as go
+    except ImportError:
+        st.error("Required packages not found. Please ensure pvlib and plotly are installed.")
+        return
+    
+    # Extract location information from metadata
+    lat = metadata.get("latitude")
+    lon = metadata.get("longitude")
+    tz_str = metadata.get("timezone", "UTC")
+    
+    if lat is None or lon is None:
+        st.error("Location information (latitude/longitude) not found in EPW file.")
+        return
+    
+    try:
+        # Get timezone object using pytz
+        try:
+            tz = pytz.timezone(tz_str)
+        except:
+            # Fallback: try to parse numeric timezone
+            try:
+                tz_offset = float(tz_str)
+                hours = int(tz_offset)
+                minutes = int((tz_offset - hours) * 60)
+                sign = "+" if tz_offset >= 0 else "-"
+                tz_for_localize = f"UTC{sign}{abs(hours):02d}:{abs(minutes):02d}"
+                tz = pytz.timezone(tz_for_localize)
+            except:
+                tz = pytz.UTC
+        
+        # Create full year of hourly times
+        times = pd.date_range(
+            "2020-01-01 00:00:00",
+            "2021-01-01 00:00:00",
+            freq="h",
+            tz=tz,
+            inclusive="left"
+        )
+        
+        # Calculate solar positions for entire year
+        solpos = solarposition.get_solarposition(times, lat, lon)
+        
+        # Filter to daytime only (elevation > 0)
+        solpos = solpos[solpos["apparent_elevation"] > 0]
+        
+        if solpos.empty:
+            st.error("No daytime solar positions found. Check timezone or location.")
+            return
+        
+        # Convert to polar coordinates (zenith distance = 90 - elevation)
+        solpos["r"] = 90 - solpos["apparent_elevation"]
+        solpos["theta"] = solpos["azimuth"]
+        
+        # Merge with EPW data to get temperature and radiation
+        # First, make EPW data timezone-aware to match solpos
+        epw_data = data.set_index("datetime")
+        if epw_data.index.tz is None:
+            epw_data.index = epw_data.index.tz_localize(tz)
+        else:
+            epw_data.index = epw_data.index.tz_convert(tz)
+        
+        # Normalize EPW data to use 2020 as the year (to match solpos calculations)
+        # This allows proper merging by month/day/hour
+        epw_data.index = epw_data.index.map(lambda x: x.replace(year=2020))
+        
+        solpos_merged = solpos.copy()
+        solpos_merged = solpos_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"]], how="left")
+        
+        # Calculate Global Horizontal Irradiance (GHI) from DNI and DHI using solar altitude angle
+        # GHI = DNI * sin(altitude) + DHI
+        altitude_rad = np.radians(solpos_merged["apparent_elevation"])
+        dni = solpos_merged["direct_normal_irradiance"].fillna(0)
+        dhi = solpos_merged["diffuse_horizontal_irradiance"].fillna(0)
+        solpos_merged["global_horizontal_irradiance"] = (
+            np.maximum(0, np.sin(altitude_rad)) * dni + dhi
+        )
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Determine color scale and colorbar title based on chart type
+        # All charts use YlOrRd colorscale for consistency with DNR chart
+        if chart_type == "Direct Normal Radiation":
+            color_data = solpos_merged.get("direct_normal_irradiance", pd.Series(0, index=solpos_merged.index))
+            color_data = color_data.fillna(0)
+            colorscale = "YlOrRd"  # Yellow-Orange-Red
+            colorbar_title = "DNR (Wh/m²)"
+            colorbar_min = 0
+            colorbar_max = 1000
+            # Ticks: 0, 200, 400, 600, 800, 1000
+            tickvals = [0, 200, 400, 600, 800, 1000]
+            ticktext = ["0", "200", "400", "600", "800", "1000"]
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "DNR: %{customdata[5]:.0f} Wh/m²"
+                "<extra></extra>"
+            )
+        elif chart_type == "Global Horizontal Radiation":
+            color_data = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index))
+            color_data = color_data.fillna(0)
+            colorscale = "YlOrRd"  # Yellow-Orange-Red
+            colorbar_title = "GHR (Wh/m²)"
+            colorbar_min = 0
+            colorbar_max = 1200
+            # Ticks: 0, 200, 400, 600, 800, 1000, 1200
+            tickvals = [0, 200, 400, 600, 800, 1000, 1200]
+            ticktext = ["0", "200", "400", "600", "800", "1000", "1200"]
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "GHR: %{customdata[5]:.0f} Wh/m²"
+                "<extra></extra>"
+            )
+        elif chart_type == "Dry Bulb Temperature":
+            color_data = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index))
+            color_data = color_data.fillna(20)
+            colorscale = "YlOrRd"  # Use same colorscale as DNR
+            colorbar_title = "Temperature (°C)"
+            colorbar_min = 5
+            colorbar_max = 40
+            # Ticks: 5, 10, 15, 20, 25, 30, 35, 40
+            tickvals = [5, 10, 15, 20, 25, 30, 35, 40]
+            ticktext = ["5", "10", "15", "20", "25", "30", "35", "40"]
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "Temperature: %{customdata[5]:.1f}°C"
+                "<extra></extra>"
+            )
+        elif chart_type == "Shading":
+            ghi = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
+            temp = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index)).fillna(20)
+            # Boolean: 1 = shading needed, 0 = no shading needed
+            shading_needed = ((temp > 28) & (ghi > 315)).astype(int)
+            color_data = shading_needed
+            colorscale = [[0, "#FFF9C4"], [1, "#E65100"]]  # pale yellow -> deep orange
+            colorbar_title = "Shading Need"
+            colorbar_min = 0
+            colorbar_max = 1
+            tickvals = [0, 1]
+            ticktext = ["No Shading", "Shading Required"]
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°<br>"
+                "Temp: %{customdata[5]:.1f}°C<br>"
+                "GHI: %{customdata[6]:.0f} Wh/m²<br>"
+                "Shading: %{customdata[7]}"
+                "<extra></extra>"
+            )
+        else:  # Sun Path - color by day of year
+            color_data = solpos_merged.index.dayofyear
+            colorscale = "YlOrRd"  # Use same colorscale as DNR
+            colorbar_title = "Day of Year"
+            colorbar_min = 1
+            colorbar_max = 365
+            # Ticks: 1, 91, 182, 273, 365 (approx quarterly)
+            tickvals = [1, 91, 182, 273, 365]
+            ticktext = ["1", "91", "182", "273", "365"]
+            hover_template = (
+                "<b>%{customdata[0]} %{customdata[1]}</b><br>"
+                "Time: %{customdata[2]}<br>"
+                "Altitude: %{customdata[3]:.1f}°<br>"
+                "Azimuth: %{customdata[4]:.1f}°"
+                "<extra></extra>"
+            )
+        
+        # ========================
+        # Add analemma curves (one per hour of day)
+        # ========================
+        first_trace = True  # Track first trace to show colorbar
+        for hour in range(24):
+            subset_idx = solpos_merged.index.hour == hour
+            subset = solpos_merged[subset_idx]
+            subset_colors = color_data[subset_idx]
+            
+            if len(subset) == 0:
+                continue
+            
+            # Format hover text components
+            month_names = subset.index.strftime("%B")
+            hour_formatted = subset.index.strftime("%I:00 %p")
+            temp_values = subset.get("dry_bulb_temperature", pd.Series(np.nan, index=subset.index))
+            dnr_values = subset.get("direct_normal_irradiance", pd.Series(np.nan, index=subset.index))
+            ghr_values = subset.get("global_horizontal_irradiance", pd.Series(np.nan, index=subset.index))
+            
+            if chart_type == "Direct Normal Radiation":
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        dnr_values.fillna(0),
+                    ),
+                    axis=-1,
+                )
+            elif chart_type == "Global Horizontal Radiation":
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        ghr_values.fillna(0),
+                    ),
+                    axis=-1,
+                )
+            elif chart_type == "Dry Bulb Temperature":
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        temp_values.fillna(20),
+                    ),
+                    axis=-1,
+                )
+            elif chart_type == "Shading":
+                shading_temp = subset.get("dry_bulb_temperature", pd.Series(np.nan, index=subset.index)).fillna(20)
+                shading_ghi = subset.get("global_horizontal_irradiance", pd.Series(np.nan, index=subset.index)).fillna(0)
+                shading_labels = np.where(
+                    (shading_temp > 28) & (shading_ghi > 315), "Required", "Not Required"
+                )
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                        shading_temp,
+                        shading_ghi,
+                        shading_labels,
+                    ),
+                    axis=-1,
+                )
+            else:  # Sun Path - only position data
+                customdata = np.stack(
+                    (
+                        month_names,
+                        subset.index.day,
+                        hour_formatted,
+                        subset["apparent_elevation"],
+                        subset["azimuth"],
+                    ),
+                    axis=-1,
+                )
+            
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=subset["r"],
+                    theta=subset["theta"],
+                    mode="lines+markers",
+                    marker=dict(
+                        size=4,
+                        color=subset_colors.values,
+                        colorscale=colorscale,
+                        cmin=colorbar_min,
+                        cmax=colorbar_max,
+                        showscale=first_trace,  # Display colorbar on first trace with data
+                        colorbar=dict(
+                            title=dict(
+                                text=colorbar_title,
+                                side="right",
+                                font=dict(size=12, color="#333"),
+                            ),
+                            thickness=20,
+                            len=0.7,
+                            x=1.1,
+                            tickvals=tickvals,
+                            ticktext=ticktext,
+                            tickmode="array"
+                        ),
+                        opacity=0.7,
+                        line=dict(width=0.5)
+                    ),
+                    line=dict(width=1, color="rgba(100, 100, 100, 0.3)"),
+                    showlegend=False,
+                    customdata=customdata,
+                    hovertemplate=hover_template,
+                )
+            )
+            first_trace = False  # Only show colorbar on first trace
+        
+        # ========================
+        # Shading region highlight
+        # ========================
+        if chart_type == "Shading":
+            # Collect all points that require shading (temp > 28°C AND GHI > 315 Wh/m²)
+            ghi_col = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
+            temp_col = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index)).fillna(20)
+            shading_mask = (temp_col > 28) & (ghi_col > 315)
+            shade_points = solpos_merged[shading_mask]
+
+            if not shade_points.empty:
+                # Compute summer solstice path to use as upper boundary cap
+                # (shading region must not extend above the summer solstice arc)
+                summer_date = pd.Timestamp("2020-06-21")
+                summer_times = pd.date_range(
+                    summer_date, summer_date + pd.Timedelta("1D"),
+                    freq="5min", tz=tz, inclusive="left"
+                )
+                summer_sol = solarposition.get_solarposition(summer_times, lat, lon)
+                summer_sol = summer_sol[summer_sol["apparent_elevation"] > 0]
+                summer_sol["r_summer"] = 90 - summer_sol["apparent_elevation"]
+
+                # Per-azimuth binning with a wide window (±9°) to bridge gaps between
+                # hour columns (~15–20° apart) without creating separate blobs.
+                az_step = 2
+                half_w = 9
+                az_bins = np.arange(0, 360, az_step)
+
+                out_az, out_r_outer, out_r_inner = [], [], []
+                for az in az_bins:
+                    shade_near = shade_points[
+                        (shade_points["azimuth"] >= az - half_w) &
+                        (shade_points["azimuth"] < az + half_w)
+                    ]
+                    if shade_near.empty:
+                        continue
+                    summer_near = summer_sol[
+                        (summer_sol["azimuth"] >= az - half_w) &
+                        (summer_sol["azimuth"] < az + half_w)
+                    ]
+                    r_outer = shade_near["r"].max()   # lowest altitude  = outermost edge
+                    r_inner = shade_near["r"].min()   # highest altitude = innermost edge
+                    # Cap inner edge at summer solstice so region stays below the arc
+                    if not summer_near.empty:
+                        r_inner = max(r_inner, summer_near["r_summer"].min())
+                    out_az.append(az)
+                    out_r_outer.append(r_outer)
+                    out_r_inner.append(r_inner)
+
+                if out_az:
+                    region_az = out_az + out_az[::-1] + [out_az[0]]
+                    region_r = out_r_outer + out_r_inner[::-1] + [out_r_outer[0]]
+
+                    fig.add_trace(
+                        go.Scatterpolar(
+                            r=region_r,
+                            theta=region_az,
+                            mode="lines",
+                            fill="toself",
+                            fillcolor="rgba(230, 81, 0, 0.18)",
+                            line=dict(color="rgba(230, 81, 0, 0.45)", width=1.2),
+                            name="Shading Required Zone",
+                            showlegend=True,
+                            hoverinfo="skip",
+                        )
+                    )
+        
+        # ========================
+        # Add special solar dates (equinoxes and solstices)
+        # ========================
+        key_dates = {
+            "Mar 21 (Spring)": ("2020-03-21", "#FF9500"),
+            "Jun 21 (Summer)": ("2020-06-21", "#FF0000"),
+            "Dec 21 (Winter)": ("2020-12-21", "#0066CC"),
+        }
+        
+        for label, (date_str, color) in key_dates.items():
+            date = pd.Timestamp(date_str)
+            day_times = pd.date_range(
+                date,
+                date + pd.Timedelta("1D"),
+                freq="5min",
+                tz=tz,
+                inclusive="left"
+            )
+            
+            sol = solarposition.get_solarposition(day_times, lat, lon)
+            sol = sol[sol["apparent_elevation"] > 0]
+            
+            if sol.empty:
+                continue
+            
+            # Add EPW data to special date curves
+            sol_merged = sol.copy()
+            sol_merged = sol_merged.join(epw_data[["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"]], how="left")
+            
+            # Calculate Global Horizontal Irradiance for special dates
+            altitude_rad = np.radians(sol_merged["apparent_elevation"])
+            dni = sol_merged["direct_normal_irradiance"].fillna(0)
+            dhi = sol_merged["diffuse_horizontal_irradiance"].fillna(0)
+            sol_merged["global_horizontal_irradiance"] = (
+                np.maximum(0, np.sin(altitude_rad)) * dni + dhi
+            )
+            
+            r = 90 - sol["apparent_elevation"]
+            theta = sol["azimuth"]
+            # draw the key date curve
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=r,
+                    theta=theta,
+                    mode="lines",
+                    line=dict(width=0.8, color=color),
+                    name=label,
+                    showlegend=True
+                )
+            )
+
+            # =========================
+            # Add hour labels on Summer curve
+            # =========================
+            if label == "Jun 21 (Summer)":
+
+                hour_labels = [6, 9, 12, 15, 18]
+
+                label_times = [
+                    pd.Timestamp(date_str).tz_localize(tz) + pd.Timedelta(hours=h)
+                    for h in hour_labels
+                ]
+
+                label_sol = solarposition.get_solarposition(label_times, lat, lon)
+                label_sol = label_sol[label_sol["apparent_elevation"] > 0]
+
+                if not label_sol.empty:
+
+                    r_labels = 90 - label_sol["apparent_elevation"]
+                    theta_labels = label_sol["azimuth"]
+
+                    fig.add_trace(
+                        go.Scatterpolar(
+                            r=r_labels,
+                            theta=theta_labels,
+                            mode="text",
+                            text=[str(h) for h in hour_labels],
+                            textfont=dict(size=11, color="black"),
+                            showlegend=False,
+                            hoverinfo="skip"
+                        )
+                    )
+            temp = sol_merged.get("dry_bulb_temperature", pd.Series(np.nan, index=sol_merged.index))
+            dnr = sol_merged.get("direct_normal_irradiance", pd.Series(np.nan, index=sol_merged.index))
+            
+            # Build customdata and hovertemplate based on chart type
+            ghr = sol_merged.get("global_horizontal_irradiance", pd.Series(np.nan, index=sol_merged.index))
+            if chart_type == "Direct Normal Radiation":
+                special_customdata = np.stack((sol["apparent_elevation"], dnr.fillna(0)), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "DNR: %{customdata[1]:.0f} Wh/m²"
+                    "<extra></extra>"
+                )
+            elif chart_type == "Global Horizontal Radiation":
+                special_customdata = np.stack((sol["apparent_elevation"], ghr.fillna(0)), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "GHR: %{customdata[1]:.0f} Wh/m²"
+                    "<extra></extra>"
+                )
+            elif chart_type == "Dry Bulb Temperature":
+                special_customdata = np.stack((sol["apparent_elevation"], temp.fillna(20)), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "Temperature: %{customdata[1]:.1f}°C"
+                    "<extra></extra>"
+                )
+            elif chart_type == "Shading":
+                s_ghi = sol_merged.get("global_horizontal_irradiance", pd.Series(np.nan, index=sol_merged.index)).fillna(0)
+                special_customdata = np.stack((sol["apparent_elevation"], temp.fillna(20), s_ghi), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°<br>"
+                    "Temp: %{customdata[1]:.1f}°C<br>"
+                    "GHI: %{customdata[2]:.0f} Wh/m²"
+                    "<extra></extra>"
+                )
+            else:  # Sun Path
+                special_customdata = np.stack((sol["apparent_elevation"],), axis=-1)
+                special_hovertemplate = (
+                    f"<b>{label}</b><br>"
+                    "Altitude: %{customdata[0]:.1f}°<br>"
+                    "Azimuth: %{theta:.1f}°"
+                    "<extra></extra>"
+                )
+            
+            # fig.add_trace(
+            #     go.Scatterpolar(
+            #         r=r,
+            #         theta=theta,
+            #         mode="lines",
+            #         line=dict(width=3, color=color),
+            #         name=label,
+            #         showlegend=True,
+            #         hovertemplate=special_hovertemplate,
+            #         customdata=special_customdata,
+            #     )
+            # )
+        
+        # ========================
+        # Configure polar layout
+        # ========================
+        fig.update_layout(
+            # title={
+            #     'text': f'☀️ Sun Path - {chart_type}',
+            #     'font': {'size': 24, 'color': '#8B4513'},
+            #     'x': 0.5,
+            #     'xanchor': 'center'
+            # },
+            polar=dict(
+                bgcolor="rgba(240, 240, 240, 0.3)",
+                radialaxis=dict(
+                    visible=True,
+                    range=[0, 90],
+                    showticklabels=False,
+                    showline=False,
+                    ticks="", 
+                    # ticks="outside",
+                    # tickfont=dict(size=10),
+                    gridcolor="rgba(128, 128, 128, 0.2)",
+                    # tickvals=[0, 15, 30, 45, 60, 75, 90],
+                    # ticktext=["90° (Zenith)", "75°", "60°", "45°", "30°", "15°", "0° (Horizon)"],
+                ),
+                angularaxis=dict(
+                    tickfont=dict(size=11),
+                    rotation=90,
+                    direction="clockwise",
+                    gridcolor="rgba(128, 128, 128, 0.3)",
+                    tickvals=[0, 45, 90, 135, 180, 225, 270, 315],
+                    ticktext=["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+                ),
+            ),
+            
+            showlegend=True,
+            legend=dict(
+                x=0.02,
+                y=0.98,
+                bgcolor="rgba(255, 255, 255, 0.9)",
+                bordercolor="black",
+                borderwidth=1,
+                font=dict(size=10)
+            ),
+            hovermode="closest",
+            height=700,
+            margin=dict(l=80, r=140, t=100, b=80),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            font=dict(family="Arial, sans-serif", size=12, color="black")
+        )
+        fig.add_trace(
+        go.Scatterpolar(
+            r=[0, 15, 30, 45, 60, 75, 90],
+            theta=[45]*7,   # NE direction
+            mode="lines+text",
+            line=dict(color="black", width=1),
+            text=[
+                "90° (Zenith)",
+                "75°",
+                "60°",
+                "45°",
+                "30°",
+                "15°",
+                "0° (Horizon)"
+            ],
+            textposition="middle right",
+            textfont=dict(size=10),
+            showlegend=False,
+            hoverinfo="skip"
+        )
+    )
+        
+        # Display with Streamlit
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error generating Sun Path Diagram: {str(e)}")
 
 # === MAIN LAYOUT ===
 col_left, col_right = st.columns([0.85, 2.15], gap="small")
@@ -797,7 +1448,7 @@ if uploaded is None:
 
 try:
     raw = uploaded.getvalue().decode("utf-8", errors="replace")
-    df = parse_epw(raw)
+    df, metadata = parse_epw(raw)
     
     # compute derived date fields used by the charts
     df["doy"] = df["datetime"].dt.dayofyear
@@ -985,216 +1636,118 @@ with col_right:
         </style>
     """, unsafe_allow_html=True)
     
-    # Create tab buttons
-    tabs_col1, tabs_col2, tabs_col3, tabs_col4, tabs_col5 = st.columns(5, gap="small")
-    
-    with tabs_col1:
-        if st.button("Annual Trend", key="tab_annual", use_container_width=True):
-            st.session_state.active_tab = "Annual Trend"
-    
-    with tabs_col2:
-        if st.button("Monthly Trend", key="tab_monthly", use_container_width=True):
-            st.session_state.active_tab = "Monthly Trend"
-    
-    with tabs_col3:
-        if st.button("Diurnal Profile", key="tab_diurnal", use_container_width=True):
-            st.session_state.active_tab = "Diurnal Profile"
-    
-    with tabs_col4:
-        if st.button("Comfort Analysis", key="tab_comfort", use_container_width=True):
-            st.session_state.active_tab = "Comfort Analysis"
-    
-    with tabs_col5:
-        if st.button("Energy Metrics", key="tab_energy", use_container_width=True):
-            st.session_state.active_tab = "Energy Metrics"
-    
-    # Add visual styling to show active tab
-    st.markdown(f"""
-        <script>
-        var active_tab = '{st.session_state.active_tab}';
-        </script>
-    """, unsafe_allow_html=True)
-    # Get the actual year from the data
-    year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
-    
-    # Create start and end dates based on selected months
-    start_month_num = st.session_state.start_month_idx + 1
-    end_month_num = st.session_state.end_month_idx + 1
-    
-    start_date = pd.to_datetime(f"{year}-{start_month_num}-01").date()
-    
-    # For end_date, get the last day of the end month
-    if end_month_num == 12:
-        end_date = pd.to_datetime(f"{year}-12-31").date()
+    # Check if Sun Path is selected - show it directly without tabs
+    if selected_parameter == "Sun Path":
+        st.markdown("<h3 style='text-align: left; margin-top: 20px;'>Sun Path Analysis</h3>", unsafe_allow_html=True)
+        
+        # Add dropdown to select chart type
+        col_selector = st.columns([1, 4])
+        with col_selector[0]:
+            chart_type = st.selectbox(
+                "Chart Type:",
+            ["Sun Path","Dry Bulb Temperature", "Direct Normal Radiation", "Global Horizontal Radiation","Shading"],
+            )
+        
+        plot_sun_path(df, metadata, chart_type)
     else:
-        end_date = (pd.to_datetime(f"{year}-{end_month_num+1}-01") - pd.Timedelta(days=1)).date()
+                # Create tab buttons
+        tabs_col1, tabs_col2, tabs_col3, tabs_col4, tabs_col5 = st.columns(5, gap="small")
+        
+        with tabs_col1:
+            if st.button("Annual Trend", key="tab_annual", use_container_width=True):
+                st.session_state.active_tab = "Annual Trend"
+        
+        with tabs_col2:
+            if st.button("Monthly Trend", key="tab_monthly", use_container_width=True):
+                st.session_state.active_tab = "Monthly Trend"
+        
+        with tabs_col3:
+            if st.button("Diurnal Profile", key="tab_diurnal", use_container_width=True):
+                st.session_state.active_tab = "Diurnal Profile"
+        
+        with tabs_col4:
+            if st.button("Comfort Analysis", key="tab_comfort", use_container_width=True):
+                st.session_state.active_tab = "Comfort Analysis"
+        
+        with tabs_col5:
+            if st.button("Energy Metrics", key="tab_energy", use_container_width=True):
+                st.session_state.active_tab = "Energy Metrics"
+        
+        # Add visual styling to show active tab
+        st.markdown(f"""
+            <script>
+            var active_tab = '{st.session_state.active_tab}';
+            </script>
+        """, unsafe_allow_html=True)
+        # Get the actual year from the data
+        year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
+        
+        # Create start and end dates based on selected months
+        start_month_num = st.session_state.start_month_idx + 1
+        end_month_num = st.session_state.end_month_idx + 1
+        
+        start_date = pd.to_datetime(f"{year}-{start_month_num}-01").date()
+        
+        # For end_date, get the last day of the end month
+        if end_month_num == 12:
+            end_date = pd.to_datetime(f"{year}-12-31").date()
+        else:
+            end_date = (pd.to_datetime(f"{year}-{end_month_num+1}-01") - pd.Timedelta(days=1)).date()
+        
+        start_hour, end_hour = st.session_state.get("hour_range", (8, 18))
+        
+        # Compute daily min/max and average
+        daily_stats = df.groupby("doy").agg({
+            "dry_bulb_temperature": ["min", "max", "mean"],
+            "relative_humidity": ["min", "max", "mean"],
+        }).reset_index()
+        
+        daily_stats.columns = ["doy", "temp_min", "temp_max", "temp_avg", "rh_min", "rh_max", "rh_avg"]
+        daily_stats["datetime_start"] = pd.to_datetime(daily_stats["doy"], format="%j", errors="coerce")
+        
+        # Map doy back to actual year-dates for chart display
+        year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
+        daily_stats["datetime"] = pd.to_datetime(
+            daily_stats["doy"].astype(str) + f"-{year}", format="%j-%Y", errors="coerce"
+        )
+        
+        # Add a day-month only column for display (without year)
+        daily_stats["datetime_display"] = daily_stats["datetime"].dt.strftime("%b %d")
+        
+        # Map comfort bands to doy
+        comfort_df = pd.DataFrame({
+            "doy": ashrae_80_lower.index,
+            "comfort_80_lower": ashrae_80_lower.values,
+            "comfort_80_upper": ashrae_80_upper.values,
+            "comfort_90_lower": ashrae_90_lower.values,
+            "comfort_90_upper": ashrae_90_upper.values,
+        })
+        
+        # Merge comfort data with daily stats
+        daily_stats = daily_stats.merge(comfort_df, on="doy", how="left")
     
-    start_hour, end_hour = st.session_state.get("hour_range", (8, 18))
-    
-    # Compute daily min/max and average
-    daily_stats = df.groupby("doy").agg({
-        "dry_bulb_temperature": ["min", "max", "mean"],
-        "relative_humidity": ["min", "max", "mean"],
-    }).reset_index()
-    
-    daily_stats.columns = ["doy", "temp_min", "temp_max", "temp_avg", "rh_min", "rh_max", "rh_avg"]
-    daily_stats["datetime_start"] = pd.to_datetime(daily_stats["doy"], format="%j", errors="coerce")
-    
-    # Map doy back to actual year-dates for chart display
-    year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
-    daily_stats["datetime"] = pd.to_datetime(
-        daily_stats["doy"].astype(str) + f"-{year}", format="%j-%Y", errors="coerce"
-    )
-    
-    # Add a day-month only column for display (without year)
-    daily_stats["datetime_display"] = daily_stats["datetime"].dt.strftime("%b %d")
-    
-    # Map comfort bands to doy
-    comfort_df = pd.DataFrame({
-        "doy": ashrae_80_lower.index,
-        "comfort_80_lower": ashrae_80_lower.values,
-        "comfort_80_upper": ashrae_80_upper.values,
-        "comfort_90_lower": ashrae_90_lower.values,
-        "comfort_90_upper": ashrae_90_upper.values,
-    })
-    
-    # Merge comfort data with daily stats
-    daily_stats = daily_stats.merge(comfort_df, on="doy", how="left")
-
-    # === TAB 1: ANNUAL TREND ===
-    if st.session_state.active_tab == "Annual Trend":
-        if selected_parameter == "Temperature":
-            import plotly.graph_objects as go
-            
-            # Calculate day of year for selected month range for greying
-            start_month_num = st.session_state.start_month_idx + 1
-            end_month_num = st.session_state.end_month_idx + 1
-            start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
-            if end_month_num == 12:
-                end_doy = 366  # Use 366 to catch Dec 31
-            else:
-                end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
-            
-            fig_yearly = go.Figure()
-            
-            # GREYED OUT: Before selected range
-            if start_doy > 1:
-                before_data = daily_stats[daily_stats["doy"] < start_doy]
-                fig_yearly.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["temp_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_yearly.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["temp_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    name="Unselected Period",
-                    showlegend=True,
-                    hoverinfo="skip",
-                ))
-                fig_yearly.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["temp_avg"],
-                    mode="lines",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            # ACTIVE: Selected range
-            active_range = daily_stats[(daily_stats["doy"] >= start_doy) & (daily_stats["doy"] <= end_doy)]
-            # Add ASHRAE 80% band for ACTIVE range
-            fig_yearly.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["comfort_80_upper"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_yearly.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["comfort_80_lower"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                name="ASHRAE adaptive comfort (80%)",
-                fillcolor="rgba(128, 128, 128, 0.2)",
-                hoverinfo="skip",
-            ))
-            
-            # Add ASHRAE 90% band
-            fig_yearly.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["comfort_90_upper"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_yearly.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["comfort_90_lower"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                name="ASHRAE adaptive comfort (90%)",
-                fillcolor="rgba(128, 128, 128, 0.4)",
-                hoverinfo="skip",
-            ))
-            
-            # Add temperature range (min/max) for ACTIVE range
-            fig_yearly.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["temp_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_yearly.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["temp_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                name="Dry bulb temperature Range",
-                fillcolor="rgba(255, 173, 173, 0.4)",
-                customdata=active_range["temp_max"],
-                hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
-            ))
-            
-            # Add average line for ACTIVE range
-            fig_yearly.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["temp_avg"],
-                mode="lines",
-                name="Average Dry bulb temperature",
-                line=dict(color="#d32f2f", width=2),
-                hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}°C<extra></extra>",
-            ))
-            
-            # GREYED OUT: After selected range
-            if end_doy < 365:
-                after_data = daily_stats[daily_stats["doy"] > end_doy]
-                if not after_data.empty:
+        # === TAB 1: ANNUAL TREND ===
+        if st.session_state.active_tab == "Annual Trend":
+            if selected_parameter == "Temperature":
+                import plotly.graph_objects as go
+                
+                # Calculate day of year for selected month range for greying
+                start_month_num = st.session_state.start_month_idx + 1
+                end_month_num = st.session_state.end_month_idx + 1
+                start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
+                if end_month_num == 12:
+                    end_doy = 366  # Use 366 to catch Dec 31
+                else:
+                    end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
+                
+                fig_yearly = go.Figure()
+                
+                # GREYED OUT: Before selected range
+                if start_doy > 1:
+                    before_data = daily_stats[daily_stats["doy"] < start_doy]
                     fig_yearly.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["temp_max"],
+                        x=before_data["datetime_display"],
+                        y=before_data["temp_max"],
                         fill=None,
                         mode="lines",
                         line_color="rgba(100, 100, 100, 0)",
@@ -1202,103 +1755,504 @@ with col_right:
                         hoverinfo="skip",
                     ))
                     fig_yearly.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["temp_min"],
+                        x=before_data["datetime_display"],
+                        y=before_data["temp_min"],
                         fill="tonexty",
                         mode="lines",
                         line_color="rgba(100, 100, 100, 0)",
                         fillcolor="rgba(180, 180, 180, 0.15)",
-                        showlegend=False,
+                        name="Unselected Period",
+                        showlegend=True,
                         hoverinfo="skip",
                     ))
                     fig_yearly.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["temp_avg"],
+                        x=before_data["datetime_display"],
+                        y=before_data["temp_avg"],
                         mode="lines",
                         line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
                         showlegend=False,
                         hoverinfo="skip",
                     ))
+                
+                # ACTIVE: Selected range
+                active_range = daily_stats[(daily_stats["doy"] >= start_doy) & (daily_stats["doy"] <= end_doy)]
+                # Add ASHRAE 80% band for ACTIVE range
+                fig_yearly.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["comfort_80_upper"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_yearly.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["comfort_80_lower"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    name="ASHRAE adaptive comfort (80%)",
+                    fillcolor="rgba(128, 128, 128, 0.2)",
+                    hoverinfo="skip",
+                ))
+                
+                # Add ASHRAE 90% band
+                fig_yearly.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["comfort_90_upper"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_yearly.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["comfort_90_lower"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    name="ASHRAE adaptive comfort (90%)",
+                    fillcolor="rgba(128, 128, 128, 0.4)",
+                    hoverinfo="skip",
+                ))
+                
+                # Add temperature range (min/max) for ACTIVE range
+                fig_yearly.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["temp_max"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_yearly.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["temp_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    name="Dry bulb temperature Range",
+                    fillcolor="rgba(255, 173, 173, 0.4)",
+                    customdata=active_range["temp_max"],
+                    hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
+                ))
+                
+                # Add average line for ACTIVE range
+                fig_yearly.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["temp_avg"],
+                    mode="lines",
+                    name="Average Dry bulb temperature",
+                    line=dict(color="#d32f2f", width=2),
+                    hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}°C<extra></extra>",
+                ))
+                
+                # GREYED OUT: After selected range
+                if end_doy < 365:
+                    after_data = daily_stats[daily_stats["doy"] > end_doy]
+                    if not after_data.empty:
+                        fig_yearly.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["temp_max"],
+                            fill=None,
+                            mode="lines",
+                            line_color="rgba(100, 100, 100, 0)",
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                        fig_yearly.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["temp_min"],
+                            fill="tonexty",
+                            mode="lines",
+                            line_color="rgba(100, 100, 100, 0)",
+                            fillcolor="rgba(180, 180, 180, 0.15)",
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                        fig_yearly.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["temp_avg"],
+                            mode="lines",
+                            line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                
+                
+                fig_yearly.update_layout(
+                    title="Annual Dry Bulb Temperature Trend",
+                    xaxis_title=None,
+                    yaxis_title="Temperature (°C)",
+                    hovermode="x unified",
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    xaxis_rangeslider_visible=False,
+                    height=450,
+                    template="plotly_white",
+                    margin=dict(b=80),
+                )
+    
+                st.plotly_chart(fig_yearly, use_container_width=True)
+                
+                # Get filtered data for period
+                filtered_df = df[
+                    (df["datetime"].dt.date >= start_date) &
+                    (df["datetime"].dt.date <= end_date) &
+                    (df["hour"].between(start_hour, end_hour))
+                ]
+                
+                if not filtered_df.empty:
+                    # Get min/max values and their corresponding rows with datetime/hour info
+                    min_idx = filtered_df["dry_bulb_temperature"].idxmin()
+                    max_idx = filtered_df["dry_bulb_temperature"].idxmax()
+                    
+                    min_row = filtered_df.loc[min_idx]
+                    max_row = filtered_df.loc[max_idx]
+                    
+                    temp_min = min_row["dry_bulb_temperature"]
+                    temp_max = max_row["dry_bulb_temperature"]
+                    temp_avg = filtered_df["dry_bulb_temperature"].mean()
+                    diurnal_range = temp_max - temp_min
+                    
+                    # Extract date and hour information for min/max
+                    min_date_str = min_row["datetime"].strftime("%b %d")
+                    min_hour = int(min_row["hour"])
+                    
+                    max_date_str = max_row["datetime"].strftime("%b %d")
+                    max_hour = int(max_row["hour"])
+                    
+                    # Calculate additional metrics using full year data
+                    # HDD18 (Heating Degree Days at 18°C base)
+                    hdd18 = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum()
+                    
+                    # CDD24 (Cooling Degree Days at 24°C base)
+                    cdd24 = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
+                    
+                    # Comfort metrics (using full year data for comfort bands)
+                    def get_comfort_band_range(temps):
+                        """Get comfort band as ±3.5°C from mean"""
+                        mean_temp = temps.mean()
+                        return mean_temp - 3.5, mean_temp + 3.5
+                    
+                    comfort_lower, comfort_upper = get_comfort_band_range(df["dry_bulb_temperature"])
+                    comfort_hours = len(df[(df["dry_bulb_temperature"] >= comfort_lower) & (df["dry_bulb_temperature"] <= comfort_upper)])
+                    comfort_80_percent = (comfort_hours / len(df)) * 100
+                    
+                    # 1% Cooling (99th percentile)
+                    cooling_1pct = df["dry_bulb_temperature"].quantile(0.99)
+                    
+                    # Overheat hours (hours above 28°C threshold)
+                    overheat_hrs = len(df[df["dry_bulb_temperature"] > 28])
+                    
+                    # Cold hours (hours below 12°C threshold)
+                    cold_hrs = len(df[df["dry_bulb_temperature"] < 12])
+                    
+                    # Temperature metrics cards - Row 1
+                    kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
+                    
+                    with kpi_col1:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #f59e0b;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">Min Temp</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{temp_min:.2f} °C</div>
+                                <div style="font-size: 11px; color: #718096;">{min_date_str} · {min_hour:02d}:00</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col2:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #ef4444;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">Max Temp</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{temp_max:.2f} °C</div>
+                                <div style="font-size: 11px; color: #718096;">{max_date_str} · {max_hour:02d}:00</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col3:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #8b5cf6;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">Avg Temp</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{temp_avg:.2f} °C</div>
+                                <div style="font-size: 11px; color: #718096;">All year average</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col4:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #3b82f6;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Diurnal Range</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{diurnal_range:.2f} °C</div>
+                                <div style="font-size: 11px; color: #718096;"></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col5:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #06b6d4;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">1% Cooling</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{cooling_1pct:.2f} °C</div>
+                                <div style="font-size: 11px; color: #718096;"></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Row 2 - Additional metrics
+                    kpi_col6, kpi_col7, kpi_col8, kpi_col9, kpi_col10 = st.columns(5)
+                    
+                    with kpi_col6:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #dc2626;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; letter-spacing: 0.5px;">HDD18</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{hdd18:.0f}</div>
+                                <div style="font-size: 11px; color: #718096;"></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col7:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #0891b2;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #0891b2; text-transform: uppercase; letter-spacing: 0.5px;">CDD24</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{cdd24:.0f}</div>
+                                <div style="font-size: 11px; color: #718096;"></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col8:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #06b6d4;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">Comfort 80%</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{comfort_80_percent:.0f} %</div>
+                                <div style="font-size: 11px; color: #718096;"></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col9:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #8b5cf6;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">Overheat Hrs</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{overheat_hrs}</div>
+                                <div style="font-size: 11px; color: #718096;"></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with kpi_col10:
+                        st.markdown(f"""
+                            <div style="
+                                background: white;
+                                padding: 16px;
+                                border-radius: 8px;
+                                border-left: 4px solid #3b82f6;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                                text-align: center;
+                            ">
+                                <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Cold Hrs</div>
+                                <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{cold_hrs}</div>
+                                <div style="font-size: 11px; color: #718096;"></div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info(f"No data available between {start_hour:02d}:00 and {end_hour:02d}:00 in the selected date range.")
             
-            
-            fig_yearly.update_layout(
-                title="Annual Dry Bulb Temperature Trend",
-                xaxis_title=None,
-                yaxis_title="Temperature (°C)",
-                hovermode="x unified",
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                ),
-                xaxis_rangeslider_visible=False,
-                height=450,
-                template="plotly_white",
-                margin=dict(b=80),
-            )
-
-            st.plotly_chart(fig_yearly, use_container_width=True)
-            
-            # Get filtered data for period
-            filtered_df = df[
-                (df["datetime"].dt.date >= start_date) &
-                (df["datetime"].dt.date <= end_date) &
-                (df["hour"].between(start_hour, end_hour))
-            ]
-            
-            if not filtered_df.empty:
-                # Get min/max values and their corresponding rows with datetime/hour info
-                min_idx = filtered_df["dry_bulb_temperature"].idxmin()
-                max_idx = filtered_df["dry_bulb_temperature"].idxmax()
+            elif selected_parameter == "Humidity":
+                import plotly.graph_objects as go
                 
-                min_row = filtered_df.loc[min_idx]
-                max_row = filtered_df.loc[max_idx]
+                # Define humidity comfort bands (typical comfort range 30-65%)
+                humidity_comfort_lower = 30
+                humidity_comfort_upper = 65
                 
-                temp_min = min_row["dry_bulb_temperature"]
-                temp_max = max_row["dry_bulb_temperature"]
-                temp_avg = filtered_df["dry_bulb_temperature"].mean()
-                diurnal_range = temp_max - temp_min
+                fig_yearly = go.Figure()
                 
-                # Extract date and hour information for min/max
-                min_date_str = min_row["datetime"].strftime("%b %d")
-                min_hour = int(min_row["hour"])
+                # Add humidity comfort band
+                fig_yearly.add_trace(go.Scatter(
+                    x=daily_stats["datetime_display"],
+                    y=[humidity_comfort_upper] * len(daily_stats),
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
                 
-                max_date_str = max_row["datetime"].strftime("%b %d")
-                max_hour = int(max_row["hour"])
+                fig_yearly.add_trace(go.Scatter(
+                    x=daily_stats["datetime_display"],
+                    y=[humidity_comfort_lower] * len(daily_stats),
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    name="Humidity comfort band",
+                    fillcolor="rgba(128, 128, 128, 0.2)",
+                    hoverinfo="skip",
+                ))
                 
-                # Calculate additional metrics using full year data
-                # HDD18 (Heating Degree Days at 18°C base)
-                hdd18 = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum()
+                # Add relative humidity range (min/max)
+                fig_yearly.add_trace(go.Scatter(
+                    x=daily_stats["datetime_display"],
+                    y=daily_stats["rh_max"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(0, 0, 255, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
                 
-                # CDD24 (Cooling Degree Days at 24°C base)
-                cdd24 = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
+                fig_yearly.add_trace(go.Scatter(
+                    x=daily_stats["datetime_display"],
+                    y=daily_stats["rh_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(0, 0, 255, 0)",
+                    name="Relative humidity Range",
+                    fillcolor="rgba(0, 150, 255, 0.3)",
+                    hovertemplate="<b>%{x}</b><br>Min: %{y:.1f}%<extra></extra>",
+                ))
                 
-                # Comfort metrics (using full year data for comfort bands)
-                def get_comfort_band_range(temps):
-                    """Get comfort band as ±3.5°C from mean"""
-                    mean_temp = temps.mean()
-                    return mean_temp - 3.5, mean_temp + 3.5
+                # Add average line
+                fig_yearly.add_trace(go.Scatter(
+                    x=daily_stats["datetime_display"],
+                    y=daily_stats["rh_avg"],
+                    mode="lines",
+                    name="Average Relative humidity",
+                    line=dict(color="#00a8ff", width=2),
+                    hovertemplate="<b>%{x}</b><br>Avg: %{y:.1f}%<extra></extra>",
+                ))
                 
-                comfort_lower, comfort_upper = get_comfort_band_range(df["dry_bulb_temperature"])
-                comfort_hours = len(df[(df["dry_bulb_temperature"] >= comfort_lower) & (df["dry_bulb_temperature"] <= comfort_upper)])
-                comfort_80_percent = (comfort_hours / len(df)) * 100
+                fig_yearly.update_layout(
+                    title="Annual Profile – Relative Humidity",
+                    xaxis_title="Day",
+                    yaxis_title="Relative Humidity (%)",
+                    hovermode="x unified",
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    xaxis_rangeslider_visible=False,
+                    height=450,
+                    template="plotly_white",
+                    margin=dict(b=80),
+                )
                 
-                # 1% Cooling (99th percentile)
-                cooling_1pct = df["dry_bulb_temperature"].quantile(0.99)
+                st.plotly_chart(fig_yearly, use_container_width=True)
                 
-                # Overheat hours (hours above 28°C threshold)
-                overheat_hrs = len(df[df["dry_bulb_temperature"] > 28])
+                # Calculate humidity metrics
+                comfort_rh_lower = 40  # Comfort zone lower bound
+                comfort_rh_upper = 60  # Comfort zone upper bound
                 
-                # Cold hours (hours below 12°C threshold)
-                cold_hrs = len(df[df["dry_bulb_temperature"] < 12])
+                # Get min/max RH values
+                rh_min = df["relative_humidity"].min()
+                rh_max = df["relative_humidity"].max()
+                rh_avg = df["relative_humidity"].mean()
                 
-                # Temperature metrics cards - Row 1
-                kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
+                # Find date/time of peak RH
+                max_rh_idx = df["relative_humidity"].idxmax()
+                max_rh_row = df.loc[max_rh_idx]
+                max_rh_date_str = max_rh_row["datetime"].strftime("%b %d")
+                max_rh_hour = int(max_rh_row["hour"])
                 
-                with kpi_col1:
+                # Comfort hours (40-60% RH)
+                comfort_rh_hours = len(df[(df["relative_humidity"] >= comfort_rh_lower) & (df["relative_humidity"] <= comfort_rh_upper)])
+                comfort_rh_percent = (comfort_rh_hours / len(df)) * 100
+                
+                # High humidity hours (> 60% RH)
+                high_humidity_hrs = len(df[df["relative_humidity"] > 60])
+                
+                # Condensation risk hours (> 75% RH sustained)
+                condensation_risk_hrs = len(df[df["relative_humidity"] > 75])
+                
+                # Low humidity hours (< 30% RH)
+                low_humidity_hrs = len(df[df["relative_humidity"] < 30])
+                
+                # Mold risk hours (> 60% RH sustained for extended periods)
+                mold_risk_hrs = len(df[df["relative_humidity"] > 60])
+                
+                # HVAC RH control (percentage within comfort band)
+                hvac_rh_control = comfort_rh_percent
+                
+                # Overhumidification hours (> 70% RH)
+                overhumidification_hrs = len(df[df["relative_humidity"] > 70])
+                
+                # Humidity metrics cards - Row 1
+                rh_col1, rh_col2, rh_col3, rh_col4, rh_col5 = st.columns(5)
+                
+                with rh_col1:
                     st.markdown(f"""
                         <div style="
                             background: white;
@@ -1308,13 +2262,13 @@ with col_right:
                             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
                             text-align: center;
                         ">
-                            <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">Min Temp</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{temp_min:.2f} °C</div>
-                            <div style="font-size: 11px; color: #718096;">{min_date_str} · {min_hour:02d}:00</div>
+                            <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">Comfort 40-60%</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{comfort_rh_percent:.0f} %</div>
+                            <div style="font-size: 11px; color: #718096;">Occupied RH Hrs</div>
                         </div>
                     """, unsafe_allow_html=True)
                 
-                with kpi_col2:
+                with rh_col2:
                     st.markdown(f"""
                         <div style="
                             background: white;
@@ -1324,13 +2278,13 @@ with col_right:
                             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
                             text-align: center;
                         ">
-                            <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">Max Temp</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{temp_max:.2f} °C</div>
-                            <div style="font-size: 11px; color: #718096;">{max_date_str} · {max_hour:02d}:00</div>
+                            <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">Peak RH (Occupied)</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{rh_max:.1f} %</div>
+                            <div style="font-size: 11px; color: #718096;">All year</div>
                         </div>
                     """, unsafe_allow_html=True)
                 
-                with kpi_col3:
+                with rh_col3:
                     st.markdown(f"""
                         <div style="
                             background: white;
@@ -1340,29 +2294,13 @@ with col_right:
                             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
                             text-align: center;
                         ">
-                            <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">Avg Temp</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{temp_avg:.2f} °C</div>
-                            <div style="font-size: 11px; color: #718096;">All year average</div>
+                            <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">High Humidity Hrs</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{high_humidity_hrs}</div>
+                            <div style="font-size: 11px; color: #718096;">&gt; 60% RH</div>
                         </div>
                     """, unsafe_allow_html=True)
                 
-                with kpi_col4:
-                    st.markdown(f"""
-                        <div style="
-                            background: white;
-                            padding: 16px;
-                            border-radius: 8px;
-                            border-left: 4px solid #3b82f6;
-                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                            text-align: center;
-                        ">
-                            <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Diurnal Range</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{diurnal_range:.2f} °C</div>
-                            <div style="font-size: 11px; color: #718096;"></div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                
-                with kpi_col5:
+                with rh_col4:
                     st.markdown(f"""
                         <div style="
                             background: white;
@@ -1372,32 +2310,96 @@ with col_right:
                             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
                             text-align: center;
                         ">
-                            <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">1% Cooling</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{cooling_1pct:.2f} °C</div>
-                            <div style="font-size: 11px; color: #718096;"></div>
+                            <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">Condensation Risk Hrs</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{condensation_risk_hrs}</div>
+                            <div style="font-size: 11px; color: #718096;">Surface Temp &lt; Dew Point</div>
                         </div>
                     """, unsafe_allow_html=True)
                 
-                # Row 2 - Additional metrics
-                kpi_col6, kpi_col7, kpi_col8, kpi_col9, kpi_col10 = st.columns(5)
-                
-                with kpi_col6:
+                with rh_col5:
                     st.markdown(f"""
                         <div style="
                             background: white;
                             padding: 16px;
                             border-radius: 8px;
-                            border-left: 4px solid #dc2626;
+                            border-left: 4px solid #3b82f6;
                             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
                             text-align: center;
                         ">
-                            <div style="font-size: 11px; font-weight: 700; color: #dc2626; text-transform: uppercase; letter-spacing: 0.5px;">HDD18</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{hdd18:.0f}</div>
+                            <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Avg RH</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{rh_avg:.1f} %</div>
                             <div style="font-size: 11px; color: #718096;"></div>
                         </div>
                     """, unsafe_allow_html=True)
                 
-                with kpi_col7:
+                # Row 2 - Additional metrics
+                rh_col6, rh_col7, rh_col8, rh_col9, rh_col10 = st.columns(5)
+                
+                with rh_col6:
+                    st.markdown(f"""
+                        <div style="
+                            background: white;
+                            padding: 16px;
+                            border-radius: 8px;
+                            border-left: 4px solid #f59e0b;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                            text-align: center;
+                        ">
+                            <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">Low Humidity Hrs</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{low_humidity_hrs}</div>
+                            <div style="font-size: 11px; color: #718096;">&lt; 30% RH</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with rh_col7:
+                    st.markdown(f"""
+                        <div style="
+                            background: white;
+                            padding: 16px;
+                            border-radius: 8px;
+                            border-left: 4px solid #ef4444;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                            text-align: center;
+                        ">
+                            <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">Mold Risk Hrs</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{mold_risk_hrs}</div>
+                            <div style="font-size: 11px; color: #718096;">&gt; 60% RH Sustained</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with rh_col8:
+                    st.markdown(f"""
+                        <div style="
+                            background: white;
+                            padding: 16px;
+                            border-radius: 8px;
+                            border-left: 4px solid #06b6d4;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                            text-align: center;
+                        ">
+                            <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">HVAC RH Control</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{hvac_rh_control:.0f} %</div>
+                            <div style="font-size: 11px; color: #718096;">Outside RH vs Inside RH</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with rh_col9:
+                    st.markdown(f"""
+                        <div style="
+                            background: white;
+                            padding: 16px;
+                            border-radius: 8px;
+                            border-left: 4px solid #3b82f6;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                            text-align: center;
+                        ">
+                            <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Overhumidification Hrs</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{overhumidification_hrs}</div>
+                            <div style="font-size: 11px; color: #718096;">System Failure Indicator</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with rh_col10:
                     st.markdown(f"""
                         <div style="
                             background: white;
@@ -1407,1216 +2409,238 @@ with col_right:
                             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
                             text-align: center;
                         ">
-                            <div style="font-size: 11px; font-weight: 700; color: #0891b2; text-transform: uppercase; letter-spacing: 0.5px;">CDD24</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{cdd24:.0f}</div>
+                            <div style="font-size: 11px; font-weight: 700; color: #0891b2; text-transform: uppercase; letter-spacing: 0.5px;">Min RH</div>
+                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{rh_min:.1f} %</div>
                             <div style="font-size: 11px; color: #718096;"></div>
                         </div>
                     """, unsafe_allow_html=True)
-                
-                with kpi_col8:
-                    st.markdown(f"""
-                        <div style="
-                            background: white;
-                            padding: 16px;
-                            border-radius: 8px;
-                            border-left: 4px solid #06b6d4;
-                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                            text-align: center;
-                        ">
-                            <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">Comfort 80%</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{comfort_80_percent:.0f} %</div>
-                            <div style="font-size: 11px; color: #718096;"></div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                
-                with kpi_col9:
-                    st.markdown(f"""
-                        <div style="
-                            background: white;
-                            padding: 16px;
-                            border-radius: 8px;
-                            border-left: 4px solid #8b5cf6;
-                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                            text-align: center;
-                        ">
-                            <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">Overheat Hrs</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{overheat_hrs}</div>
-                            <div style="font-size: 11px; color: #718096;"></div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                
-                with kpi_col10:
-                    st.markdown(f"""
-                        <div style="
-                            background: white;
-                            padding: 16px;
-                            border-radius: 8px;
-                            border-left: 4px solid #3b82f6;
-                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                            text-align: center;
-                        ">
-                            <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Cold Hrs</div>
-                            <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{cold_hrs}</div>
-                            <div style="font-size: 11px; color: #718096;"></div>
-                        </div>
-                    """, unsafe_allow_html=True)
+            
             else:
-                st.info(f"No data available between {start_hour:02d}:00 and {end_hour:02d}:00 in the selected date range.")
-        
-        elif selected_parameter == "Humidity":
-            import plotly.graph_objects as go
-            
-            # Define humidity comfort bands (typical comfort range 30-65%)
-            humidity_comfort_lower = 30
-            humidity_comfort_upper = 65
-            
-            fig_yearly = go.Figure()
-            
-            # Add humidity comfort band
-            fig_yearly.add_trace(go.Scatter(
-                x=daily_stats["datetime_display"],
-                y=[humidity_comfort_upper] * len(daily_stats),
-                fill=None,
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_yearly.add_trace(go.Scatter(
-                x=daily_stats["datetime_display"],
-                y=[humidity_comfort_lower] * len(daily_stats),
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                name="Humidity comfort band",
-                fillcolor="rgba(128, 128, 128, 0.2)",
-                hoverinfo="skip",
-            ))
-            
-            # Add relative humidity range (min/max)
-            fig_yearly.add_trace(go.Scatter(
-                x=daily_stats["datetime_display"],
-                y=daily_stats["rh_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(0, 0, 255, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_yearly.add_trace(go.Scatter(
-                x=daily_stats["datetime_display"],
-                y=daily_stats["rh_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(0, 0, 255, 0)",
-                name="Relative humidity Range",
-                fillcolor="rgba(0, 150, 255, 0.3)",
-                hovertemplate="<b>%{x}</b><br>Min: %{y:.1f}%<extra></extra>",
-            ))
-            
-            # Add average line
-            fig_yearly.add_trace(go.Scatter(
-                x=daily_stats["datetime_display"],
-                y=daily_stats["rh_avg"],
-                mode="lines",
-                name="Average Relative humidity",
-                line=dict(color="#00a8ff", width=2),
-                hovertemplate="<b>%{x}</b><br>Avg: %{y:.1f}%<extra></extra>",
-            ))
-            
-            fig_yearly.update_layout(
-                title="Annual Profile – Relative Humidity",
-                xaxis_title="Day",
-                yaxis_title="Relative Humidity (%)",
-                hovermode="x unified",
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                ),
-                xaxis_rangeslider_visible=False,
-                height=450,
-                template="plotly_white",
-                margin=dict(b=80),
-            )
-            
-            st.plotly_chart(fig_yearly, use_container_width=True)
-            
-            # Calculate humidity metrics
-            comfort_rh_lower = 40  # Comfort zone lower bound
-            comfort_rh_upper = 60  # Comfort zone upper bound
-            
-            # Get min/max RH values
-            rh_min = df["relative_humidity"].min()
-            rh_max = df["relative_humidity"].max()
-            rh_avg = df["relative_humidity"].mean()
-            
-            # Find date/time of peak RH
-            max_rh_idx = df["relative_humidity"].idxmax()
-            max_rh_row = df.loc[max_rh_idx]
-            max_rh_date_str = max_rh_row["datetime"].strftime("%b %d")
-            max_rh_hour = int(max_rh_row["hour"])
-            
-            # Comfort hours (40-60% RH)
-            comfort_rh_hours = len(df[(df["relative_humidity"] >= comfort_rh_lower) & (df["relative_humidity"] <= comfort_rh_upper)])
-            comfort_rh_percent = (comfort_rh_hours / len(df)) * 100
-            
-            # High humidity hours (> 60% RH)
-            high_humidity_hrs = len(df[df["relative_humidity"] > 60])
-            
-            # Condensation risk hours (> 75% RH sustained)
-            condensation_risk_hrs = len(df[df["relative_humidity"] > 75])
-            
-            # Low humidity hours (< 30% RH)
-            low_humidity_hrs = len(df[df["relative_humidity"] < 30])
-            
-            # Mold risk hours (> 60% RH sustained for extended periods)
-            mold_risk_hrs = len(df[df["relative_humidity"] > 60])
-            
-            # HVAC RH control (percentage within comfort band)
-            hvac_rh_control = comfort_rh_percent
-            
-            # Overhumidification hours (> 70% RH)
-            overhumidification_hrs = len(df[df["relative_humidity"] > 70])
-            
-            # Humidity metrics cards - Row 1
-            rh_col1, rh_col2, rh_col3, rh_col4, rh_col5 = st.columns(5)
-            
-            with rh_col1:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #f59e0b;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">Comfort 40-60%</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{comfort_rh_percent:.0f} %</div>
-                        <div style="font-size: 11px; color: #718096;">Occupied RH Hrs</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col2:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #ef4444;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">Peak RH (Occupied)</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{rh_max:.1f} %</div>
-                        <div style="font-size: 11px; color: #718096;">All year</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col3:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #8b5cf6;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px;">High Humidity Hrs</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{high_humidity_hrs}</div>
-                        <div style="font-size: 11px; color: #718096;">&gt; 60% RH</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col4:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #06b6d4;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">Condensation Risk Hrs</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{condensation_risk_hrs}</div>
-                        <div style="font-size: 11px; color: #718096;">Surface Temp &lt; Dew Point</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col5:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #3b82f6;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Avg RH</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{rh_avg:.1f} %</div>
-                        <div style="font-size: 11px; color: #718096;"></div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            # Row 2 - Additional metrics
-            rh_col6, rh_col7, rh_col8, rh_col9, rh_col10 = st.columns(5)
-            
-            with rh_col6:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #f59e0b;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #f59e0b; text-transform: uppercase; letter-spacing: 0.5px;">Low Humidity Hrs</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{low_humidity_hrs}</div>
-                        <div style="font-size: 11px; color: #718096;">&lt; 30% RH</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col7:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #ef4444;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #ef4444; text-transform: uppercase; letter-spacing: 0.5px;">Mold Risk Hrs</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{mold_risk_hrs}</div>
-                        <div style="font-size: 11px; color: #718096;">&gt; 60% RH Sustained</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col8:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #06b6d4;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #06b6d4; text-transform: uppercase; letter-spacing: 0.5px;">HVAC RH Control</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{hvac_rh_control:.0f} %</div>
-                        <div style="font-size: 11px; color: #718096;">Outside RH vs Inside RH</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col9:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #3b82f6;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #3b82f6; text-transform: uppercase; letter-spacing: 0.5px;">Overhumidification Hrs</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{overhumidification_hrs}</div>
-                        <div style="font-size: 11px; color: #718096;">System Failure Indicator</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            with rh_col10:
-                st.markdown(f"""
-                    <div style="
-                        background: white;
-                        padding: 16px;
-                        border-radius: 8px;
-                        border-left: 4px solid #0891b2;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                        text-align: center;
-                    ">
-                        <div style="font-size: 11px; font-weight: 700; color: #0891b2; text-transform: uppercase; letter-spacing: 0.5px;">Min RH</div>
-                        <div style="font-size: 26px; font-weight: 700; color: #2c3e50; margin: 8px 0;">{rh_min:.1f} %</div>
-                        <div style="font-size: 11px; color: #718096;"></div>
-                    </div>
-                """, unsafe_allow_html=True)
-        
-        else:
-            st.info("Sun Path analysis is not yet implemented.")
-
-    # === TAB 2: MONTHLY TREND ===
-    elif st.session_state.active_tab == "Monthly Trend":
-        if selected_parameter == "Temperature":
-            import plotly.graph_objects as go
-            
-            # Calculate monthly statistics
-            monthly_stats = df.groupby("month").agg({
-                "dry_bulb_temperature": ["min", "max", "mean"],
-                "relative_humidity": ["min", "max", "mean"],
-            }).reset_index()
-            
-            monthly_stats.columns = ["month", "temp_min", "temp_max", "temp_avg", "rh_min", "rh_max", "rh_avg"]
-            month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-            monthly_stats["month_name"] = monthly_stats["month"].apply(lambda x: month_names[x-1])
-            
-            fig_monthly = go.Figure()
-            
-            # Get selected month range
-            start_month = st.session_state.start_month_idx + 1
-            end_month = st.session_state.end_month_idx + 1
-            
-            # GREYED OUT: Before selected range
-            if start_month > 1:
+                st.info("Sun Path analysis is not yet implemented.")
+    
+        # === TAB 2: MONTHLY TREND ===
+        elif st.session_state.active_tab == "Monthly Trend":
+            if selected_parameter == "Temperature":
+                import plotly.graph_objects as go
+                
+                # Calculate monthly statistics
+                monthly_stats = df.groupby("month").agg({
+                    "dry_bulb_temperature": ["min", "max", "mean"],
+                    "relative_humidity": ["min", "max", "mean"],
+                }).reset_index()
+                
+                monthly_stats.columns = ["month", "temp_min", "temp_max", "temp_avg", "rh_min", "rh_max", "rh_avg"]
+                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                monthly_stats["month_name"] = monthly_stats["month"].apply(lambda x: month_names[x-1])
+                
+                fig_monthly = go.Figure()
+                
+                # Get selected month range
+                start_month = st.session_state.start_month_idx + 1
+                end_month = st.session_state.end_month_idx + 1
+                
+                # GREYED OUT: Before selected range
+                if start_month > 1:
+                    before_months = monthly_stats[monthly_stats["month"] < start_month]
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=before_months["temp_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=before_months["temp_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        name="Unselected Period",
+                        showlegend=True,
+                        hoverinfo="skip",
+                    ))
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=before_months["temp_avg"],
+                        mode="lines+markers",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        marker=dict(size=4),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                
+                # ACTIVE: Selected range
+                active_months = monthly_stats[(monthly_stats["month"] >= start_month) & (monthly_stats["month"] <= end_month)]
+                
+                # Add temperature range (min/max) for active range
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=active_months["temp_max"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=active_months["temp_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    name="Monthly Temperature Range",
+                    fillcolor="rgba(255, 173, 173, 0.4)",
+                    customdata=active_months["temp_max"],
+                    hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
+                ))
+                
+                # Add average line for active range
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=active_months["temp_avg"],
+                    mode="lines+markers",
+                    name="Monthly Average Temperature",
+                    line=dict(color="#d32f2f", width=2),
+                    marker=dict(size=8),
+                    hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}°C<extra></extra>",
+                ))
+                
+                # GREYED OUT: After selected range
+                if end_month < 12:
+                    after_months = monthly_stats[monthly_stats["month"] > end_month]
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=after_months["temp_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=after_months["temp_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=after_months["temp_avg"],
+                        mode="lines+markers",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        marker=dict(size=4),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                
+                
+                fig_monthly.update_layout(
+                    title="Monthly Temperature Trend",
+                    xaxis_title="Month",
+                    yaxis_title="Temperature (°C)",
+                    hovermode="x unified",
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    height=450,
+                    template="plotly_white",
+                    margin=dict(b=80),
+                )
+                
+                st.plotly_chart(fig_monthly, use_container_width=True)
+                
+                # Display monthly KPI metrics
+                st.markdown("#### Monthly Temperature Summary")
+                
+                # Create a dataframe for monthly metrics
+                kpi_data = monthly_stats[["month_name", "temp_min", "temp_max", "temp_avg"]].copy()
+                kpi_data.columns = ["Month", "Min (°C)", "Max (°C)", "Avg (°C)"]
+                
+                # Display as a nice table
+                st.dataframe(
+                    kpi_data,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Min (°C)": st.column_config.NumberColumn(format="%.2f"),
+                        "Max (°C)": st.column_config.NumberColumn(format="%.2f"),
+                        "Avg (°C)": st.column_config.NumberColumn(format="%.2f"),
+                    }
+                )
+                
+            elif selected_parameter == "Humidity":
+                import plotly.graph_objects as go
+                
+                # Get selected month range for greying
+                start_month = st.session_state.start_month_idx + 1
+                end_month = st.session_state.end_month_idx + 1
+                
+                # Calculate monthly humidity statistics
+                monthly_stats = df.groupby("month").agg({
+                    "relative_humidity": ["min", "max", "mean"],
+                }).reset_index()
+                
+                monthly_stats.columns = ["month", "rh_min", "rh_max", "rh_avg"]
+                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                monthly_stats["month_name"] = monthly_stats["month"].apply(lambda x: month_names[x-1])
+                
+                # Split data into before/active/after ranges
                 before_months = monthly_stats[monthly_stats["month"] < start_month]
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=before_months["temp_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=before_months["temp_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    name="Unselected Period",
-                    showlegend=True,
-                    hoverinfo="skip",
-                ))
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=before_months["temp_avg"],
-                    mode="lines+markers",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    marker=dict(size=4),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            # ACTIVE: Selected range
-            active_months = monthly_stats[(monthly_stats["month"] >= start_month) & (monthly_stats["month"] <= end_month)]
-            
-            # Add temperature range (min/max) for active range
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=active_months["temp_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=active_months["temp_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                name="Monthly Temperature Range",
-                fillcolor="rgba(255, 173, 173, 0.4)",
-                customdata=active_months["temp_max"],
-                hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
-            ))
-            
-            # Add average line for active range
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=active_months["temp_avg"],
-                mode="lines+markers",
-                name="Monthly Average Temperature",
-                line=dict(color="#d32f2f", width=2),
-                marker=dict(size=8),
-                hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}°C<extra></extra>",
-            ))
-            
-            # GREYED OUT: After selected range
-            if end_month < 12:
+                active_months = monthly_stats[(monthly_stats["month"] >= start_month) & (monthly_stats["month"] <= end_month)]
                 after_months = monthly_stats[monthly_stats["month"] > end_month]
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=after_months["temp_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=after_months["temp_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=after_months["temp_avg"],
-                    mode="lines+markers",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    marker=dict(size=4),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            
-            fig_monthly.update_layout(
-                title="Monthly Temperature Trend",
-                xaxis_title="Month",
-                yaxis_title="Temperature (°C)",
-                hovermode="x unified",
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                ),
-                height=450,
-                template="plotly_white",
-                margin=dict(b=80),
-            )
-            
-            st.plotly_chart(fig_monthly, use_container_width=True)
-            
-            # Display monthly KPI metrics
-            st.markdown("#### Monthly Temperature Summary")
-            
-            # Create a dataframe for monthly metrics
-            kpi_data = monthly_stats[["month_name", "temp_min", "temp_max", "temp_avg"]].copy()
-            kpi_data.columns = ["Month", "Min (°C)", "Max (°C)", "Avg (°C)"]
-            
-            # Display as a nice table
-            st.dataframe(
-                kpi_data,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Min (°C)": st.column_config.NumberColumn(format="%.2f"),
-                    "Max (°C)": st.column_config.NumberColumn(format="%.2f"),
-                    "Avg (°C)": st.column_config.NumberColumn(format="%.2f"),
-                }
-            )
-            
-        elif selected_parameter == "Humidity":
-            import plotly.graph_objects as go
-            
-            # Get selected month range for greying
-            start_month = st.session_state.start_month_idx + 1
-            end_month = st.session_state.end_month_idx + 1
-            
-            # Calculate monthly humidity statistics
-            monthly_stats = df.groupby("month").agg({
-                "relative_humidity": ["min", "max", "mean"],
-            }).reset_index()
-            
-            monthly_stats.columns = ["month", "rh_min", "rh_max", "rh_avg"]
-            month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-            monthly_stats["month_name"] = monthly_stats["month"].apply(lambda x: month_names[x-1])
-            
-            # Split data into before/active/after ranges
-            before_months = monthly_stats[monthly_stats["month"] < start_month]
-            active_months = monthly_stats[(monthly_stats["month"] >= start_month) & (monthly_stats["month"] <= end_month)]
-            after_months = monthly_stats[monthly_stats["month"] > end_month]
-            
-            fig_monthly = go.Figure()
-            
-            # GREYED OUT: Before selected range
-            if not before_months.empty:
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=[65] * len(before_months),
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
                 
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=[30] * len(before_months),
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    name="Unselected Period",
-                    showlegend=True,
-                    hoverinfo="skip",
-                ))
+                fig_monthly = go.Figure()
                 
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=before_months["rh_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=before_months["rh_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_monthly.add_trace(go.Scatter(
-                    x=before_months["month_name"],
-                    y=before_months["rh_avg"],
-                    mode="lines",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            # ACTIVE: Selected month range
-            # Add humidity comfort band for active range
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=[65] * len(active_months),
-                fill=None,
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=[30] * len(active_months),
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                name="Humidity comfort band (30-65%)",
-                fillcolor="rgba(128, 128, 128, 0.2)",
-                hoverinfo="skip",
-            ))
-            
-            # Add humidity range (min/max) for active range
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=active_months["rh_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(0, 0, 255, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=active_months["rh_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(0, 0, 255, 0)",
-                name="Monthly Humidity Range",
-                fillcolor="rgba(0, 150, 255, 0.3)",
-                customdata=active_months["rh_max"],
-                hovertemplate="<b>%{x}</b><br>Min: %{y:.1f}%<br>Max: %{customdata:.1f}%<extra></extra>",
-            ))
-            
-            # Add average line for active range
-            fig_monthly.add_trace(go.Scatter(
-                x=active_months["month_name"],
-                y=active_months["rh_avg"],
-                mode="lines+markers",
-                name="Monthly Average Humidity",
-                line=dict(color="#00a8ff", width=2),
-                marker=dict(size=8),
-                hovertemplate="<b>%{x}</b><br>Avg: %{y:.1f}%<extra></extra>",
-            ))
-            
-            # GREYED OUT: After selected range
-            if not after_months.empty:
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=[65] * len(after_months),
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=[30] * len(after_months),
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=after_months["rh_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=after_months["rh_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_monthly.add_trace(go.Scatter(
-                    x=after_months["month_name"],
-                    y=after_months["rh_avg"],
-                    mode="lines",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            fig_monthly.update_layout(
-                title="Monthly Relative Humidity Trend",
-                xaxis_title="Month",
-                yaxis_title="Relative Humidity (%)",
-                hovermode="x unified",
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
-                ),
-                height=450,
-                template="plotly_white",
-                margin=dict(b=80),
-            )
-            
-            st.plotly_chart(fig_monthly, use_container_width=True)
-            
-            # Display monthly KPI metrics
-            st.markdown("#### Monthly Humidity Summary")
-            
-            # Create a dataframe for monthly metrics
-            kpi_data = monthly_stats[["month_name", "rh_min", "rh_max", "rh_avg"]].copy()
-            kpi_data.columns = ["Month", "Min (%)", "Max (%)", "Avg (%)"]
-            
-            # Display as a nice table
-            st.dataframe(
-                kpi_data,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Min (%)": st.column_config.NumberColumn(format="%.1f"),
-                    "Max (%)": st.column_config.NumberColumn(format="%.1f"),
-                    "Avg (%)": st.column_config.NumberColumn(format="%.1f"),
-                }
-            )
-        
-        else:
-            st.info("Monthly trend analysis is not yet implemented for Sun Path.")
-
-    # === TAB 3: DIURNAL PROFILE ===
-    elif st.session_state.active_tab == "Diurnal Profile":
-        import plotly.graph_objects as go
-        
-        if selected_parameter == "Temperature":
-            # Create hourly averages for each month
-            hourly_stats = df.groupby(["month", "hour"]).agg({
-                "dry_bulb_temperature": ["min", "max", "mean"],
-            }).reset_index()
-            
-            hourly_stats.columns = ["month", "hour", "temp_min", "temp_max", "temp_avg"]
-            hourly_stats["month_name"] = hourly_stats["month"].apply(lambda x: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
-                                                                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][x-1])
-            
-            fig_diurnal = go.Figure()
-            
-            # Get hourly averages across ALL months for diurnal profile
-            # Diurnal Profile uses TIME filter only, not month filter
-            avg_hourly = hourly_stats.groupby("hour").agg({
-                "temp_min": "min",
-                "temp_max": "max",
-                "temp_avg": "mean"
-            }).reset_index()
-            
-            # Get selected hour range
-            start_hour_sel, end_hour_sel = st.session_state.get("hour_range", (8, 18))
-            
-            # GREYED OUT: Before selected hours
-            if start_hour_sel > 0:
-                before_hours = avg_hourly[avg_hourly["hour"] < start_hour_sel]
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours["hour"],
-                    y=before_hours["temp_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours["hour"],
-                    y=before_hours["temp_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    name="Unselected Hours",
-                    showlegend=True,
-                    hoverinfo="skip",
-                ))
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours["hour"],
-                    y=before_hours["temp_avg"],
-                    mode="lines+markers",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    marker=dict(size=4),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            # ACTIVE: Selected hours
-            active_hours = avg_hourly[(avg_hourly["hour"] >= start_hour_sel) & (avg_hourly["hour"] <= end_hour_sel)]
-            
-            # Add temperature range for active hours
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours["hour"],
-                y=active_hours["temp_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours["hour"],
-                y=active_hours["temp_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                name="Daily Range",
-                fillcolor="rgba(255, 173, 173, 0.3)",
-                customdata=active_hours["temp_max"],
-                hovertemplate="<b>Hour %{x}:00</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
-            ))
-            
-            # Add average for active hours
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours["hour"],
-                y=active_hours["temp_avg"],
-                mode="lines+markers",
-                name="Average Temperature",
-                line=dict(color="#d32f2f", width=2),
-                marker=dict(size=6),
-                hovertemplate="<b>Hour %{x}:00</b><br>Avg: %{y:.2f}°C<extra></extra>",
-            ))
-            
-            # GREYED OUT: After selected hours
-            if end_hour_sel < 23:
-                after_hours = avg_hourly[avg_hourly["hour"] > end_hour_sel]
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours["hour"],
-                    y=after_hours["temp_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours["hour"],
-                    y=after_hours["temp_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours["hour"],
-                    y=after_hours["temp_avg"],
-                    mode="lines+markers",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    marker=dict(size=4),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            
-            fig_diurnal.update_layout(
-                title="Diurnal Temperature Profile",
-                xaxis_title="Hour of Day",
-                yaxis_title="Temperature (°C)",
-                hovermode="x unified",
-                showlegend=True,
-                template="plotly_white",
-                height=450,
-            )
-            
-            st.plotly_chart(fig_diurnal, use_container_width=True)
-        
-        elif selected_parameter == "Humidity":
-            # Create hourly humidity averages for each month
-            hourly_humidity = df.groupby(["month", "hour"]).agg({
-                "relative_humidity": ["min", "max", "mean"],
-            }).reset_index()
-            
-            hourly_humidity.columns = ["month", "hour", "rh_min", "rh_max", "rh_avg"]
-            
-            fig_diurnal = go.Figure()
-            
-            # Get hourly averages across ALL months for diurnal profile
-            avg_hourly_rh = hourly_humidity.groupby("hour").agg({
-                "rh_min": "min",
-                "rh_max": "max",
-                "rh_avg": "mean"
-            }).reset_index()
-            
-            # Get selected hour range
-            start_hour_sel, end_hour_sel = st.session_state.get("hour_range", (8, 18))
-            
-            # GREYED OUT: Before selected hours
-            if start_hour_sel > 0:
-                before_hours_rh = avg_hourly_rh[avg_hourly_rh["hour"] < start_hour_sel]
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours_rh["hour"],
-                    y=[65] * len(before_hours_rh),
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours_rh["hour"],
-                    y=[30] * len(before_hours_rh),
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    name="Unselected Hours",
-                    showlegend=True,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours_rh["hour"],
-                    y=before_hours_rh["rh_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours_rh["hour"],
-                    y=before_hours_rh["rh_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=before_hours_rh["hour"],
-                    y=before_hours_rh["rh_avg"],
-                    mode="lines+markers",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    marker=dict(size=4),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            # ACTIVE: Selected hours
-            active_hours_rh = avg_hourly_rh[(avg_hourly_rh["hour"] >= start_hour_sel) & (avg_hourly_rh["hour"] <= end_hour_sel)]
-            
-            # Add humidity comfort band for active hours
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours_rh["hour"],
-                y=[65] * len(active_hours_rh),
-                fill=None,
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours_rh["hour"],
-                y=[30] * len(active_hours_rh),
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                name="Comfort band (30-65%)",
-                fillcolor="rgba(128, 128, 128, 0.2)",
-                hoverinfo="skip",
-            ))
-            
-            # Add humidity range for active hours
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours_rh["hour"],
-                y=active_hours_rh["rh_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(0, 0, 255, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours_rh["hour"],
-                y=active_hours_rh["rh_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(0, 0, 255, 0)",
-                name="Humidity Range",
-                fillcolor="rgba(0, 150, 255, 0.3)",
-                customdata=active_hours_rh["rh_max"],
-                hovertemplate="<b>Hour %{x}:00</b><br>Min: %{y:.1f}%<br>Max: %{customdata:.1f}%<extra></extra>",
-            ))
-            
-            # Add average for active hours
-            fig_diurnal.add_trace(go.Scatter(
-                x=active_hours_rh["hour"],
-                y=active_hours_rh["rh_avg"],
-                mode="lines+markers",
-                name="Average Humidity",
-                line=dict(color="#00a8ff", width=2),
-                marker=dict(size=6),
-                hovertemplate="<b>Hour %{x}:00</b><br>Avg: %{y:.1f}%<extra></extra>",
-            ))
-            
-            # GREYED OUT: After selected hours
-            if end_hour_sel < 23:
-                after_hours_rh = avg_hourly_rh[avg_hourly_rh["hour"] > end_hour_sel]
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours_rh["hour"],
-                    y=[65] * len(after_hours_rh),
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours_rh["hour"],
-                    y=[30] * len(after_hours_rh),
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours_rh["hour"],
-                    y=after_hours_rh["rh_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours_rh["hour"],
-                    y=after_hours_rh["rh_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                
-                fig_diurnal.add_trace(go.Scatter(
-                    x=after_hours_rh["hour"],
-                    y=after_hours_rh["rh_avg"],
-                    mode="lines+markers",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    marker=dict(size=4),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            fig_diurnal.update_layout(
-                title="Diurnal Humidity Profile",
-                xaxis_title="Hour of Day",
-                yaxis_title="Relative Humidity (%)",
-                hovermode="x unified",
-                showlegend=True,
-                template="plotly_white",
-                height=450,
-            )
-            
-            st.plotly_chart(fig_diurnal, use_container_width=True)
-        
-        else:
-            st.info("Sun Path analysis is not yet implemented.")
-    
-    # === TAB 4: COMFORT ANALYSIS ===
-    elif st.session_state.active_tab == "Comfort Analysis":
-        if selected_parameter == "Temperature":
-            import plotly.graph_objects as go
-            
-            # Calculate day of year for selected month range for greying
-            start_month_num = st.session_state.start_month_idx + 1
-            end_month_num = st.session_state.end_month_idx + 1
-            start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
-            if end_month_num == 12:
-                end_doy = 366
-            else:
-                end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
-            
-            # Create comfort analysis visualization
-            fig_comfort = go.Figure()
-            
-            # GREYED OUT: Before selected range
-            if start_doy > 1:
-                before_data = daily_stats[daily_stats["doy"] < start_doy]
-                fig_comfort.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["temp_max"],
-                    fill=None,
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-                fig_comfort.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["temp_min"],
-                    fill="tonexty",
-                    mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    name="Unselected Period",
-                    showlegend=True,
-                    hoverinfo="skip",
-                ))
-                fig_comfort.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["temp_avg"],
-                    mode="lines",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ))
-            
-            # ACTIVE: Selected range
-            active_range = daily_stats[(daily_stats["doy"] >= start_doy) & (daily_stats["doy"] <= end_doy)]
-            
-            # Add comfort bands for active range
-            fig_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["comfort_90_upper"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["comfort_90_lower"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                name="ASHRAE 90% acceptability",
-                fillcolor="rgba(76, 175, 80, 0.4)",
-                hoverinfo="skip",
-            ))
-            
-            # Add temperature data for active range
-            fig_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["temp_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["temp_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(255, 0, 0, 0)",
-                name="Daily Temperature Range",
-                fillcolor="rgba(255, 173, 173, 0.3)",
-                customdata=active_range["temp_max"],
-                hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
-            ))
-            
-            # Add average for active range
-            fig_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["temp_avg"],
-                mode="lines",
-                name="Average Temperature",
-                line=dict(color="#d32f2f", width=2),
-                hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}°C<extra></extra>",
-            ))
-            
-            # GREYED OUT: After selected range
-            if end_doy < 365:
-                after_data = daily_stats[daily_stats["doy"] > end_doy]
-                if not after_data.empty:
-                    fig_comfort.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["temp_max"],
+                # GREYED OUT: Before selected range
+                if not before_months.empty:
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=[65] * len(before_months),
                         fill=None,
                         mode="lines",
                         line_color="rgba(100, 100, 100, 0)",
                         showlegend=False,
                         hoverinfo="skip",
                     ))
-                    fig_comfort.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["temp_min"],
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=[30] * len(before_months),
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        name="Unselected Period",
+                        showlegend=True,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=before_months["rh_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=before_months["rh_min"],
                         fill="tonexty",
                         mode="lines",
                         line_color="rgba(100, 100, 100, 0)",
@@ -2624,153 +2648,88 @@ with col_right:
                         showlegend=False,
                         hoverinfo="skip",
                     ))
-                    fig_comfort.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["temp_avg"],
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=before_months["month_name"],
+                        y=before_months["rh_avg"],
                         mode="lines",
                         line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
                         showlegend=False,
                         hoverinfo="skip",
                     ))
-            
-            
-            fig_comfort.update_layout(
-                title="Comfort Analysis – ASHRAE Adaptive Comfort",
-                xaxis_title="Day",
-                yaxis_title="Temperature (°C)",
-                hovermode="x unified",
-                showlegend=True,
-                template="plotly_white",
-                height=450,
-            )
-            
-            st.plotly_chart(fig_comfort, use_container_width=True)
-        
-        elif selected_parameter == "Humidity":
-            import plotly.graph_objects as go
-            
-            # Calculate day of year for selected month range for greying
-            start_month_num = st.session_state.start_month_idx + 1
-            end_month_num = st.session_state.end_month_idx + 1
-            start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
-            if end_month_num == 12:
-                end_doy = 366
-            else:
-                end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
-            
-            # Create humidity comfort analysis visualization
-            fig_humidity_comfort = go.Figure()
-            
-            # Define comfort zones for humidity
-            comfort_upper = 60  # Upper comfort limit
-            comfort_lower = 40  # Lower comfort limit
-            
-            # GREYED OUT: Before selected range
-            if start_doy > 1:
-                before_data = daily_stats[daily_stats["doy"] < start_doy]
-                fig_humidity_comfort.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["rh_max"],
+                
+                # ACTIVE: Selected month range
+                # Add humidity comfort band for active range
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=[65] * len(active_months),
                     fill=None,
                     mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
+                    line_color="rgba(128, 128, 128, 0)",
                     showlegend=False,
                     hoverinfo="skip",
                 ))
-                fig_humidity_comfort.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["rh_min"],
+                
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=[30] * len(active_months),
                     fill="tonexty",
                     mode="lines",
-                    line_color="rgba(100, 100, 100, 0)",
-                    fillcolor="rgba(180, 180, 180, 0.15)",
-                    name="Unselected Period",
-                    showlegend=True,
+                    line_color="rgba(128, 128, 128, 0)",
+                    name="Humidity comfort band (30-65%)",
+                    fillcolor="rgba(128, 128, 128, 0.2)",
                     hoverinfo="skip",
                 ))
-                fig_humidity_comfort.add_trace(go.Scatter(
-                    x=before_data["datetime_display"],
-                    y=before_data["rh_avg"],
+                
+                # Add humidity range (min/max) for active range
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=active_months["rh_max"],
+                    fill=None,
                     mode="lines",
-                    line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                    line_color="rgba(0, 0, 255, 0)",
                     showlegend=False,
                     hoverinfo="skip",
                 ))
-            
-            # ACTIVE: Selected range
-            active_range = daily_stats[(daily_stats["doy"] >= start_doy) & (daily_stats["doy"] <= end_doy)]
-            
-            # Add comfort band (40-60% RH) for active range
-            fig_humidity_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=[comfort_upper] * len(active_range),
-                fill=None,
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_humidity_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=[comfort_lower] * len(active_range),
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(128, 128, 128, 0)",
-                name="Comfort Band (40-60%)",
-                fillcolor="rgba(76, 175, 80, 0.4)",
-                hoverinfo="skip",
-            ))
-            
-            # Add humidity data for active range
-            fig_humidity_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["rh_max"],
-                fill=None,
-                mode="lines",
-                line_color="rgba(0, 150, 255, 0)",
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            
-            fig_humidity_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["rh_min"],
-                fill="tonexty",
-                mode="lines",
-                line_color="rgba(0, 150, 255, 0)",
-                name="Daily RH Range",
-                fillcolor="rgba(0, 150, 255, 0.3)",
-                customdata=active_range["rh_max"],
-                hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}%<br>Max: %{customdata:.2f}%<extra></extra>",
-            ))
-            
-            # Add average for active range
-            fig_humidity_comfort.add_trace(go.Scatter(
-                x=active_range["datetime_display"],
-                y=active_range["rh_avg"],
-                mode="lines",
-                name="Average RH",
-                line=dict(color="#00a8ff", width=2),
-                hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}%<extra></extra>",
-            ))
-            
-            # GREYED OUT: After selected range
-            if end_doy < 365:
-                after_data = daily_stats[daily_stats["doy"] > end_doy]
-                if not after_data.empty:
-                    fig_humidity_comfort.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["rh_max"],
+                
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=active_months["rh_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(0, 0, 255, 0)",
+                    name="Monthly Humidity Range",
+                    fillcolor="rgba(0, 150, 255, 0.3)",
+                    customdata=active_months["rh_max"],
+                    hovertemplate="<b>%{x}</b><br>Min: %{y:.1f}%<br>Max: %{customdata:.1f}%<extra></extra>",
+                ))
+                
+                # Add average line for active range
+                fig_monthly.add_trace(go.Scatter(
+                    x=active_months["month_name"],
+                    y=active_months["rh_avg"],
+                    mode="lines+markers",
+                    name="Monthly Average Humidity",
+                    line=dict(color="#00a8ff", width=2),
+                    marker=dict(size=8),
+                    hovertemplate="<b>%{x}</b><br>Avg: %{y:.1f}%<extra></extra>",
+                ))
+                
+                # GREYED OUT: After selected range
+                if not after_months.empty:
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=[65] * len(after_months),
                         fill=None,
                         mode="lines",
                         line_color="rgba(100, 100, 100, 0)",
                         showlegend=False,
                         hoverinfo="skip",
                     ))
-                    fig_humidity_comfort.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["rh_min"],
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=[30] * len(after_months),
                         fill="tonexty",
                         mode="lines",
                         line_color="rgba(100, 100, 100, 0)",
@@ -2778,220 +2737,926 @@ with col_right:
                         showlegend=False,
                         hoverinfo="skip",
                     ))
-                    fig_humidity_comfort.add_trace(go.Scatter(
-                        x=after_data["datetime_display"],
-                        y=after_data["rh_avg"],
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=after_months["rh_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=after_months["rh_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_monthly.add_trace(go.Scatter(
+                        x=after_months["month_name"],
+                        y=after_months["rh_avg"],
                         mode="lines",
                         line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
                         showlegend=False,
                         hoverinfo="skip",
                     ))
-            
-            fig_humidity_comfort.update_layout(
-                title="Humidity Comfort Analysis – Optimal Range (40-60%)",
-                xaxis_title="Day",
-                yaxis_title="Relative Humidity (%)",
-                hovermode="x unified",
-                showlegend=True,
-                template="plotly_white",
-                height=450,
-            )
-            
-            st.plotly_chart(fig_humidity_comfort, use_container_width=True)
-        else:
-            st.info("Comfort Analysis is available for Temperature and Humidity parameters.")
-    
-    # === TAB 5: ENERGY METRICS ===
-    elif st.session_state.active_tab == "Energy Metrics":
-        if selected_parameter == "Temperature":
-            # Calculate energy metrics
-            filtered_df = df[
-                (df["datetime"].dt.date >= start_date) &
-                (df["datetime"].dt.date <= end_date) &
-                (df["hour"].between(start_hour, end_hour))
-            ]
-            
-            if not filtered_df.empty:
-                # HDD18 (Heating Degree Days at 18°C base)
-                hdd18 = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum()
                 
-                # CDD24 (Cooling Degree Days at 24°C base)
-                cdd24 = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
-                
-                # Additional energy metrics
-                hdd18_filtered = (18 - filtered_df["dry_bulb_temperature"]).clip(lower=0).sum()
-                cdd24_filtered = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
-                
-                # Degree days by month
-                monthly_hdd = df.groupby("month").apply(lambda x: (18 - x["dry_bulb_temperature"]).clip(lower=0).sum())
-                monthly_cdd = df.groupby("month").apply(lambda x: (x["dry_bulb_temperature"] - 24).clip(lower=0).sum())
-                
-                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                
-                # Display metrics in cards
-                st.markdown("#### Energy Performance Indicators")
-                
-                energy_col1, energy_col2, energy_col3, energy_col4 = st.columns(4)
-                
-                with energy_col1:
-                    st.metric("HDD18 (Annual)", f"{hdd18:.0f}", "Heating Degree-Days")
-                
-                with energy_col2:
-                    st.metric("CDD24 (Annual)", f"{cdd24:.0f}", "Cooling Degree-Days")
-                
-                with energy_col3:
-                    st.metric("HDD18 (Period)", f"{hdd18_filtered:.0f}", "Heating Degree-Days")
-                
-                with energy_col4:
-                    st.metric("CDD24 (Period)", f"{cdd24_filtered:.0f}", "Cooling Degree-Days")
-                
-                # Monthly breakdown chart
-                import plotly.graph_objects as go
-                from plotly.subplots import make_subplots
-                
-                fig_energy = make_subplots(specs=[[{"secondary_y": True}]])
-                
-                fig_energy.add_trace(
-                    go.Bar(x=month_names, y=monthly_hdd.values, name="HDD18", marker_color="#2196F3"),
-                    secondary_y=False,
-                )
-                
-                fig_energy.add_trace(
-                    go.Bar(x=month_names, y=monthly_cdd.values, name="CDD24", marker_color="#FF9800"),
-                    secondary_y=False,
-                )
-                
-                
-                fig_energy.update_layout(
-                    title="Monthly Degree-Days Distribution",
+                fig_monthly.update_layout(
+                    title="Monthly Relative Humidity Trend",
                     xaxis_title="Month",
-                    yaxis_title="Degree-Days",
+                    yaxis_title="Relative Humidity (%)",
                     hovermode="x unified",
-                    height=400,
-                    barmode="stack",
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    ),
+                    height=450,
+                    template="plotly_white",
+                    margin=dict(b=80),
                 )
                 
-                st.plotly_chart(fig_energy, use_container_width=True)
+                st.plotly_chart(fig_monthly, use_container_width=True)
+                
+                # Display monthly KPI metrics
+                st.markdown("#### Monthly Humidity Summary")
+                
+                # Create a dataframe for monthly metrics
+                kpi_data = monthly_stats[["month_name", "rh_min", "rh_max", "rh_avg"]].copy()
+                kpi_data.columns = ["Month", "Min (%)", "Max (%)", "Avg (%)"]
+                
+                # Display as a nice table
+                st.dataframe(
+                    kpi_data,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Min (%)": st.column_config.NumberColumn(format="%.1f"),
+                        "Max (%)": st.column_config.NumberColumn(format="%.1f"),
+                        "Avg (%)": st.column_config.NumberColumn(format="%.1f"),
+                    }
+                )
+            
+            else:
+                st.info("Monthly trend analysis is not yet implemented for Sun Path.")
+    
+        # === TAB 3: DIURNAL PROFILE ===
+        elif st.session_state.active_tab == "Diurnal Profile":
+            import plotly.graph_objects as go
+            
+            if selected_parameter == "Temperature":
+                # Create hourly averages for each month
+                hourly_stats = df.groupby(["month", "hour"]).agg({
+                    "dry_bulb_temperature": ["min", "max", "mean"],
+                }).reset_index()
+                
+                hourly_stats.columns = ["month", "hour", "temp_min", "temp_max", "temp_avg"]
+                hourly_stats["month_name"] = hourly_stats["month"].apply(lambda x: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                                                                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][x-1])
+                
+                fig_diurnal = go.Figure()
+                
+                # Get hourly averages across ALL months for diurnal profile
+                # Diurnal Profile uses TIME filter only, not month filter
+                avg_hourly = hourly_stats.groupby("hour").agg({
+                    "temp_min": "min",
+                    "temp_max": "max",
+                    "temp_avg": "mean"
+                }).reset_index()
+                
+                # Get selected hour range
+                start_hour_sel, end_hour_sel = st.session_state.get("hour_range", (8, 18))
+                
+                # GREYED OUT: Before selected hours
+                if start_hour_sel > 0:
+                    before_hours = avg_hourly[avg_hourly["hour"] < start_hour_sel]
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours["hour"],
+                        y=before_hours["temp_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours["hour"],
+                        y=before_hours["temp_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        name="Unselected Hours",
+                        showlegend=True,
+                        hoverinfo="skip",
+                    ))
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours["hour"],
+                        y=before_hours["temp_avg"],
+                        mode="lines+markers",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        marker=dict(size=4),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                
+                # ACTIVE: Selected hours
+                active_hours = avg_hourly[(avg_hourly["hour"] >= start_hour_sel) & (avg_hourly["hour"] <= end_hour_sel)]
+                
+                # Add temperature range for active hours
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours["hour"],
+                    y=active_hours["temp_max"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours["hour"],
+                    y=active_hours["temp_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    name="Daily Range",
+                    fillcolor="rgba(255, 173, 173, 0.3)",
+                    customdata=active_hours["temp_max"],
+                    hovertemplate="<b>Hour %{x}:00</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
+                ))
+                
+                # Add average for active hours
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours["hour"],
+                    y=active_hours["temp_avg"],
+                    mode="lines+markers",
+                    name="Average Temperature",
+                    line=dict(color="#d32f2f", width=2),
+                    marker=dict(size=6),
+                    hovertemplate="<b>Hour %{x}:00</b><br>Avg: %{y:.2f}°C<extra></extra>",
+                ))
+                
+                # GREYED OUT: After selected hours
+                if end_hour_sel < 23:
+                    after_hours = avg_hourly[avg_hourly["hour"] > end_hour_sel]
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours["hour"],
+                        y=after_hours["temp_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours["hour"],
+                        y=after_hours["temp_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours["hour"],
+                        y=after_hours["temp_avg"],
+                        mode="lines+markers",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        marker=dict(size=4),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                
+                
+                fig_diurnal.update_layout(
+                    title="Diurnal Temperature Profile",
+                    xaxis_title="Hour of Day",
+                    yaxis_title="Temperature (°C)",
+                    hovermode="x unified",
+                    showlegend=True,
+                    template="plotly_white",
+                    height=450,
+                )
+                
+                st.plotly_chart(fig_diurnal, use_container_width=True)
+            
+            elif selected_parameter == "Humidity":
+                # Create hourly humidity averages for each month
+                hourly_humidity = df.groupby(["month", "hour"]).agg({
+                    "relative_humidity": ["min", "max", "mean"],
+                }).reset_index()
+                
+                hourly_humidity.columns = ["month", "hour", "rh_min", "rh_max", "rh_avg"]
+                
+                fig_diurnal = go.Figure()
+                
+                # Get hourly averages across ALL months for diurnal profile
+                avg_hourly_rh = hourly_humidity.groupby("hour").agg({
+                    "rh_min": "min",
+                    "rh_max": "max",
+                    "rh_avg": "mean"
+                }).reset_index()
+                
+                # Get selected hour range
+                start_hour_sel, end_hour_sel = st.session_state.get("hour_range", (8, 18))
+                
+                # GREYED OUT: Before selected hours
+                if start_hour_sel > 0:
+                    before_hours_rh = avg_hourly_rh[avg_hourly_rh["hour"] < start_hour_sel]
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours_rh["hour"],
+                        y=[65] * len(before_hours_rh),
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours_rh["hour"],
+                        y=[30] * len(before_hours_rh),
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        name="Unselected Hours",
+                        showlegend=True,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours_rh["hour"],
+                        y=before_hours_rh["rh_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours_rh["hour"],
+                        y=before_hours_rh["rh_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=before_hours_rh["hour"],
+                        y=before_hours_rh["rh_avg"],
+                        mode="lines+markers",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        marker=dict(size=4),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                
+                # ACTIVE: Selected hours
+                active_hours_rh = avg_hourly_rh[(avg_hourly_rh["hour"] >= start_hour_sel) & (avg_hourly_rh["hour"] <= end_hour_sel)]
+                
+                # Add humidity comfort band for active hours
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours_rh["hour"],
+                    y=[65] * len(active_hours_rh),
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours_rh["hour"],
+                    y=[30] * len(active_hours_rh),
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    name="Comfort band (30-65%)",
+                    fillcolor="rgba(128, 128, 128, 0.2)",
+                    hoverinfo="skip",
+                ))
+                
+                # Add humidity range for active hours
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours_rh["hour"],
+                    y=active_hours_rh["rh_max"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(0, 0, 255, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours_rh["hour"],
+                    y=active_hours_rh["rh_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(0, 0, 255, 0)",
+                    name="Humidity Range",
+                    fillcolor="rgba(0, 150, 255, 0.3)",
+                    customdata=active_hours_rh["rh_max"],
+                    hovertemplate="<b>Hour %{x}:00</b><br>Min: %{y:.1f}%<br>Max: %{customdata:.1f}%<extra></extra>",
+                ))
+                
+                # Add average for active hours
+                fig_diurnal.add_trace(go.Scatter(
+                    x=active_hours_rh["hour"],
+                    y=active_hours_rh["rh_avg"],
+                    mode="lines+markers",
+                    name="Average Humidity",
+                    line=dict(color="#00a8ff", width=2),
+                    marker=dict(size=6),
+                    hovertemplate="<b>Hour %{x}:00</b><br>Avg: %{y:.1f}%<extra></extra>",
+                ))
+                
+                # GREYED OUT: After selected hours
+                if end_hour_sel < 23:
+                    after_hours_rh = avg_hourly_rh[avg_hourly_rh["hour"] > end_hour_sel]
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours_rh["hour"],
+                        y=[65] * len(after_hours_rh),
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours_rh["hour"],
+                        y=[30] * len(after_hours_rh),
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours_rh["hour"],
+                        y=after_hours_rh["rh_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours_rh["hour"],
+                        y=after_hours_rh["rh_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    
+                    fig_diurnal.add_trace(go.Scatter(
+                        x=after_hours_rh["hour"],
+                        y=after_hours_rh["rh_avg"],
+                        mode="lines+markers",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        marker=dict(size=4),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                
+                fig_diurnal.update_layout(
+                    title="Diurnal Humidity Profile",
+                    xaxis_title="Hour of Day",
+                    yaxis_title="Relative Humidity (%)",
+                    hovermode="x unified",
+                    showlegend=True,
+                    template="plotly_white",
+                    height=450,
+                )
+                
+                st.plotly_chart(fig_diurnal, use_container_width=True)
+            
+            else:
+                st.info("Sun Path analysis is not yet implemented.")
         
-        elif selected_parameter == "Humidity":
-            # Calculate humidity-related metrics
-            filtered_df = df[
-                (df["datetime"].dt.date >= start_date) &
-                (df["datetime"].dt.date <= end_date) &
-                (df["hour"].between(start_hour, end_hour))
-            ]
-            
-            if not filtered_df.empty:
-                # Calculate humidity metrics for full year
-                high_humidity_annual = len(df[df["relative_humidity"] > 60])
-                condensation_risk_annual = len(df[df["relative_humidity"] > 75])
-                mold_risk_annual = len(df[df["relative_humidity"] > 60])
-                low_humidity_annual = len(df[df["relative_humidity"] < 30])
-                
-                # Filtered period metrics
-                high_humidity_filtered = len(filtered_df[filtered_df["relative_humidity"] > 60])
-                condensation_risk_filtered = len(filtered_df[filtered_df["relative_humidity"] > 75])
-                
-                # Monthly breakdown
-                monthly_high_rh = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] > 60]))
-                monthly_condensation = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] > 75]))
-                monthly_mold_risk = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] > 60]))
-                monthly_low_rh = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] < 30]))
-                
-                month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                
-                # Display metrics in cards
-                st.markdown("#### Humidity Performance Indicators")
-                
-                humidity_col1, humidity_col2, humidity_col3, humidity_col4 = st.columns(4)
-                
-                with humidity_col1:
-                    st.metric("High RH Hrs (Annual)", f"{high_humidity_annual:.0f}", ">60% RH")
-                
-                with humidity_col2:
-                    st.metric("Condensation Risk (Annual)", f"{condensation_risk_annual:.0f}", ">75% RH")
-                
-                with humidity_col3:
-                    st.metric("High RH Hrs (Period)", f"{high_humidity_filtered:.0f}", ">60% RH")
-                
-                with humidity_col4:
-                    st.metric("Condensation (Period)", f"{condensation_risk_filtered:.0f}", ">75% RH")
-                
-                # Monthly breakdown chart
+        # === TAB 4: COMFORT ANALYSIS ===
+        elif st.session_state.active_tab == "Comfort Analysis":
+            if selected_parameter == "Temperature":
                 import plotly.graph_objects as go
-                from plotly.subplots import make_subplots
                 
-                fig_humidity_energy = make_subplots(specs=[[{"secondary_y": True}]])
+                # Calculate day of year for selected month range for greying
+                start_month_num = st.session_state.start_month_idx + 1
+                end_month_num = st.session_state.end_month_idx + 1
+                start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
+                if end_month_num == 12:
+                    end_doy = 366
+                else:
+                    end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
                 
-                fig_humidity_energy.add_trace(
-                    go.Bar(x=month_names, y=monthly_high_rh.values, name="High RH (>60%)", marker_color="#0099ff"),
-                    secondary_y=False,
-                )
+                # Create comfort analysis visualization
+                fig_comfort = go.Figure()
                 
-                fig_humidity_energy.add_trace(
-                    go.Bar(x=month_names, y=monthly_condensation.values, name="Condensation Risk (>75%)", marker_color="#FF6B6B"),
-                    secondary_y=False,
-                )
+                # GREYED OUT: Before selected range
+                if start_doy > 1:
+                    before_data = daily_stats[daily_stats["doy"] < start_doy]
+                    fig_comfort.add_trace(go.Scatter(
+                        x=before_data["datetime_display"],
+                        y=before_data["temp_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_comfort.add_trace(go.Scatter(
+                        x=before_data["datetime_display"],
+                        y=before_data["temp_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        name="Unselected Period",
+                        showlegend=True,
+                        hoverinfo="skip",
+                    ))
+                    fig_comfort.add_trace(go.Scatter(
+                        x=before_data["datetime_display"],
+                        y=before_data["temp_avg"],
+                        mode="lines",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
                 
-                fig_humidity_energy.add_trace(
-                    go.Scatter(x=month_names, y=monthly_low_rh.values, name="Low RH (<30%)", 
-                              line=dict(color="#FFA500", width=2), mode="lines+markers"),
-                    secondary_y=False,
-                )
+                # ACTIVE: Selected range
+                active_range = daily_stats[(daily_stats["doy"] >= start_doy) & (daily_stats["doy"] <= end_doy)]
                 
-                fig_humidity_energy.update_layout(
-                    title="Monthly Humidity Risk Distribution",
-                    xaxis_title="Month",
-                    yaxis_title="Hours",
+                # Add comfort bands for active range
+                fig_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["comfort_90_upper"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["comfort_90_lower"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    name="ASHRAE 90% acceptability",
+                    fillcolor="rgba(76, 175, 80, 0.4)",
+                    hoverinfo="skip",
+                ))
+                
+                # Add temperature data for active range
+                fig_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["temp_max"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["temp_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(255, 0, 0, 0)",
+                    name="Daily Temperature Range",
+                    fillcolor="rgba(255, 173, 173, 0.3)",
+                    customdata=active_range["temp_max"],
+                    hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>",
+                ))
+                
+                # Add average for active range
+                fig_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["temp_avg"],
+                    mode="lines",
+                    name="Average Temperature",
+                    line=dict(color="#d32f2f", width=2),
+                    hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}°C<extra></extra>",
+                ))
+                
+                # GREYED OUT: After selected range
+                if end_doy < 365:
+                    after_data = daily_stats[daily_stats["doy"] > end_doy]
+                    if not after_data.empty:
+                        fig_comfort.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["temp_max"],
+                            fill=None,
+                            mode="lines",
+                            line_color="rgba(100, 100, 100, 0)",
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                        fig_comfort.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["temp_min"],
+                            fill="tonexty",
+                            mode="lines",
+                            line_color="rgba(100, 100, 100, 0)",
+                            fillcolor="rgba(180, 180, 180, 0.15)",
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                        fig_comfort.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["temp_avg"],
+                            mode="lines",
+                            line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                
+                
+                fig_comfort.update_layout(
+                    title="Comfort Analysis – ASHRAE Adaptive Comfort",
+                    xaxis_title="Day",
+                    yaxis_title="Temperature (°C)",
                     hovermode="x unified",
-                    height=400,
-                    barmode="group",
+                    showlegend=True,
+                    template="plotly_white",
+                    height=450,
                 )
                 
-                st.plotly_chart(fig_humidity_energy, use_container_width=True)
-        else:
-            st.info("Energy Metrics is available for Temperature and Humidity parameters.")
-
-# === GENERATE REPORT LOGIC ===
-# if st.session_state.get("generate_report", False):
-    # with st.spinner("Generating PowerPoint report..."):
-# try:
-#     # Get filter parameters from left column
-#     start_month_num = st.session_state.start_month_idx + 1
-#     end_month_num = st.session_state.end_month_idx + 1
-#     year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
+                st.plotly_chart(fig_comfort, use_container_width=True)
+            
+            elif selected_parameter == "Humidity":
+                import plotly.graph_objects as go
+                
+                # Calculate day of year for selected month range for greying
+                start_month_num = st.session_state.start_month_idx + 1
+                end_month_num = st.session_state.end_month_idx + 1
+                start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
+                if end_month_num == 12:
+                    end_doy = 366
+                else:
+                    end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
+                
+                # Create humidity comfort analysis visualization
+                fig_humidity_comfort = go.Figure()
+                
+                # Define comfort zones for humidity
+                comfort_upper = 60  # Upper comfort limit
+                comfort_lower = 40  # Lower comfort limit
+                
+                # GREYED OUT: Before selected range
+                if start_doy > 1:
+                    before_data = daily_stats[daily_stats["doy"] < start_doy]
+                    fig_humidity_comfort.add_trace(go.Scatter(
+                        x=before_data["datetime_display"],
+                        y=before_data["rh_max"],
+                        fill=None,
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                    fig_humidity_comfort.add_trace(go.Scatter(
+                        x=before_data["datetime_display"],
+                        y=before_data["rh_min"],
+                        fill="tonexty",
+                        mode="lines",
+                        line_color="rgba(100, 100, 100, 0)",
+                        fillcolor="rgba(180, 180, 180, 0.15)",
+                        name="Unselected Period",
+                        showlegend=True,
+                        hoverinfo="skip",
+                    ))
+                    fig_humidity_comfort.add_trace(go.Scatter(
+                        x=before_data["datetime_display"],
+                        y=before_data["rh_avg"],
+                        mode="lines",
+                        line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                        showlegend=False,
+                        hoverinfo="skip",
+                    ))
+                
+                # ACTIVE: Selected range
+                active_range = daily_stats[(daily_stats["doy"] >= start_doy) & (daily_stats["doy"] <= end_doy)]
+                
+                # Add comfort band (40-60% RH) for active range
+                fig_humidity_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=[comfort_upper] * len(active_range),
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_humidity_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=[comfort_lower] * len(active_range),
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(128, 128, 128, 0)",
+                    name="Comfort Band (40-60%)",
+                    fillcolor="rgba(76, 175, 80, 0.4)",
+                    hoverinfo="skip",
+                ))
+                
+                # Add humidity data for active range
+                fig_humidity_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["rh_max"],
+                    fill=None,
+                    mode="lines",
+                    line_color="rgba(0, 150, 255, 0)",
+                    showlegend=False,
+                    hoverinfo="skip",
+                ))
+                
+                fig_humidity_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["rh_min"],
+                    fill="tonexty",
+                    mode="lines",
+                    line_color="rgba(0, 150, 255, 0)",
+                    name="Daily RH Range",
+                    fillcolor="rgba(0, 150, 255, 0.3)",
+                    customdata=active_range["rh_max"],
+                    hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}%<br>Max: %{customdata:.2f}%<extra></extra>",
+                ))
+                
+                # Add average for active range
+                fig_humidity_comfort.add_trace(go.Scatter(
+                    x=active_range["datetime_display"],
+                    y=active_range["rh_avg"],
+                    mode="lines",
+                    name="Average RH",
+                    line=dict(color="#00a8ff", width=2),
+                    hovertemplate="<b>%{x}</b><br>Avg: %{y:.2f}%<extra></extra>",
+                ))
+                
+                # GREYED OUT: After selected range
+                if end_doy < 365:
+                    after_data = daily_stats[daily_stats["doy"] > end_doy]
+                    if not after_data.empty:
+                        fig_humidity_comfort.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["rh_max"],
+                            fill=None,
+                            mode="lines",
+                            line_color="rgba(100, 100, 100, 0)",
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                        fig_humidity_comfort.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["rh_min"],
+                            fill="tonexty",
+                            mode="lines",
+                            line_color="rgba(100, 100, 100, 0)",
+                            fillcolor="rgba(180, 180, 180, 0.15)",
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                        fig_humidity_comfort.add_trace(go.Scatter(
+                            x=after_data["datetime_display"],
+                            y=after_data["rh_avg"],
+                            mode="lines",
+                            line=dict(color="rgba(150, 150, 150, 0.4)", width=1, dash="dot"),
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+                
+                fig_humidity_comfort.update_layout(
+                    title="Humidity Comfort Analysis – Optimal Range (40-60%)",
+                    xaxis_title="Day",
+                    yaxis_title="Relative Humidity (%)",
+                    hovermode="x unified",
+                    showlegend=True,
+                    template="plotly_white",
+                    height=450,
+                )
+                
+                st.plotly_chart(fig_humidity_comfort, use_container_width=True)
+            else:
+                st.info("Comfort Analysis is available for Temperature and Humidity parameters.")
+        
+        # === TAB 5: ENERGY METRICS ===
+        elif st.session_state.active_tab == "Energy Metrics":
+            if selected_parameter == "Temperature":
+                # Calculate energy metrics
+                filtered_df = df[
+                    (df["datetime"].dt.date >= start_date) &
+                    (df["datetime"].dt.date <= end_date) &
+                    (df["hour"].between(start_hour, end_hour))
+                ]
+                
+                if not filtered_df.empty:
+                    # HDD18 (Heating Degree Days at 18°C base)
+                    hdd18 = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum()
+                    
+                    # CDD24 (Cooling Degree Days at 24°C base)
+                    cdd24 = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
+                    
+                    # Additional energy metrics
+                    hdd18_filtered = (18 - filtered_df["dry_bulb_temperature"]).clip(lower=0).sum()
+                    cdd24_filtered = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
+                    
+                    # Degree days by month
+                    monthly_hdd = df.groupby("month").apply(lambda x: (18 - x["dry_bulb_temperature"]).clip(lower=0).sum())
+                    monthly_cdd = df.groupby("month").apply(lambda x: (x["dry_bulb_temperature"] - 24).clip(lower=0).sum())
+                    
+                    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                    
+                    # Display metrics in cards
+                    st.markdown("#### Energy Performance Indicators")
+                    
+                    energy_col1, energy_col2, energy_col3, energy_col4 = st.columns(4)
+                    
+                    with energy_col1:
+                        st.metric("HDD18 (Annual)", f"{hdd18:.0f}", "Heating Degree-Days")
+                    
+                    with energy_col2:
+                        st.metric("CDD24 (Annual)", f"{cdd24:.0f}", "Cooling Degree-Days")
+                    
+                    with energy_col3:
+                        st.metric("HDD18 (Period)", f"{hdd18_filtered:.0f}", "Heating Degree-Days")
+                    
+                    with energy_col4:
+                        st.metric("CDD24 (Period)", f"{cdd24_filtered:.0f}", "Cooling Degree-Days")
+                    
+                    # Monthly breakdown chart
+                    import plotly.graph_objects as go
+                    from plotly.subplots import make_subplots
+                    
+                    fig_energy = make_subplots(specs=[[{"secondary_y": True}]])
+                    
+                    fig_energy.add_trace(
+                        go.Bar(x=month_names, y=monthly_hdd.values, name="HDD18", marker_color="#2196F3"),
+                        secondary_y=False,
+                    )
+                    
+                    fig_energy.add_trace(
+                        go.Bar(x=month_names, y=monthly_cdd.values, name="CDD24", marker_color="#FF9800"),
+                        secondary_y=False,
+                    )
+                    
+                    
+                    fig_energy.update_layout(
+                        title="Monthly Degree-Days Distribution",
+                        xaxis_title="Month",
+                        yaxis_title="Degree-Days",
+                        hovermode="x unified",
+                        height=400,
+                        barmode="stack",
+                    )
+                    
+                    st.plotly_chart(fig_energy, use_container_width=True)
+            
+            elif selected_parameter == "Humidity":
+                # Calculate humidity-related metrics
+                filtered_df = df[
+                    (df["datetime"].dt.date >= start_date) &
+                    (df["datetime"].dt.date <= end_date) &
+                    (df["hour"].between(start_hour, end_hour))
+                ]
+                
+                if not filtered_df.empty:
+                    # Calculate humidity metrics for full year
+                    high_humidity_annual = len(df[df["relative_humidity"] > 60])
+                    condensation_risk_annual = len(df[df["relative_humidity"] > 75])
+                    mold_risk_annual = len(df[df["relative_humidity"] > 60])
+                    low_humidity_annual = len(df[df["relative_humidity"] < 30])
+                    
+                    # Filtered period metrics
+                    high_humidity_filtered = len(filtered_df[filtered_df["relative_humidity"] > 60])
+                    condensation_risk_filtered = len(filtered_df[filtered_df["relative_humidity"] > 75])
+                    
+                    # Monthly breakdown
+                    monthly_high_rh = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] > 60]))
+                    monthly_condensation = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] > 75]))
+                    monthly_mold_risk = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] > 60]))
+                    monthly_low_rh = df.groupby("month").apply(lambda x: len(x[x["relative_humidity"] < 30]))
+                    
+                    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                    
+                    # Display metrics in cards
+                    st.markdown("#### Humidity Performance Indicators")
+                    
+                    humidity_col1, humidity_col2, humidity_col3, humidity_col4 = st.columns(4)
+                    
+                    with humidity_col1:
+                        st.metric("High RH Hrs (Annual)", f"{high_humidity_annual:.0f}", ">60% RH")
+                    
+                    with humidity_col2:
+                        st.metric("Condensation Risk (Annual)", f"{condensation_risk_annual:.0f}", ">75% RH")
+                    
+                    with humidity_col3:
+                        st.metric("High RH Hrs (Period)", f"{high_humidity_filtered:.0f}", ">60% RH")
+                    
+                    with humidity_col4:
+                        st.metric("Condensation (Period)", f"{condensation_risk_filtered:.0f}", ">75% RH")
+                    
+                    # Monthly breakdown chart
+                    import plotly.graph_objects as go
+                    from plotly.subplots import make_subplots
+                    
+                    fig_humidity_energy = make_subplots(specs=[[{"secondary_y": True}]])
+                    
+                    fig_humidity_energy.add_trace(
+                        go.Bar(x=month_names, y=monthly_high_rh.values, name="High RH (>60%)", marker_color="#0099ff"),
+                        secondary_y=False,
+                    )
+                    
+                    fig_humidity_energy.add_trace(
+                        go.Bar(x=month_names, y=monthly_condensation.values, name="Condensation Risk (>75%)", marker_color="#FF6B6B"),
+                        secondary_y=False,
+                    )
+                    
+                    fig_humidity_energy.add_trace(
+                        go.Scatter(x=month_names, y=monthly_low_rh.values, name="Low RH (<30%)", 
+                                  line=dict(color="#FFA500", width=2), mode="lines+markers"),
+                        secondary_y=False,
+                    )
+                    
+                    fig_humidity_energy.update_layout(
+                        title="Monthly Humidity Risk Distribution",
+                        xaxis_title="Month",
+                        yaxis_title="Hours",
+                        hovermode="x unified",
+                        height=400,
+                        barmode="group",
+                    )
+                    
+                    st.plotly_chart(fig_humidity_energy, use_container_width=True)
+            else:
+                st.info("Energy Metrics is available for Temperature and Humidity parameters.")
     
-#     start_date = pd.to_datetime(f"{year}-{start_month_num}-01").date()
-#     if end_month_num == 12:
-#         end_date = pd.to_datetime(f"{year}-12-31").date()
-#     else:
-#         end_date = (pd.to_datetime(f"{year}-{end_month_num+1}-01") - pd.Timedelta(days=1)).date()
-    
-#     start_hour, end_hour = st.session_state.get("hour_range", (8, 18))
-    
-#     # Generate the report
-#     report_bytes = generate_pptx_report(
-#         df, 
-#         start_date, 
-#         end_date, 
-#         start_hour, 
-#         end_hour, 
-#         selected_parameter
-#     )
-    
-#     # Offer download
-#     st.download_button(
-#         label="📥 Download Report (PowerPoint)",
-#         data=report_bytes,
-#         file_name=f"Climate_Analysis_Report_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.pptx",
-#         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-#         key="download_report"
-#     )
-    
-    # Reset the flag
-    # st.session_state.generate_report = False
-    
-# except Exception as e:
+    # === GENERATE REPORT LOGIC ===
+    # if st.session_state.get("generate_report", False):
+        # with st.spinner("Generating PowerPoint report..."):
+    # try:
+    #     # Get filter parameters from left column
+    #     start_month_num = st.session_state.start_month_idx + 1
+    #     end_month_num = st.session_state.end_month_idx + 1
+    #     year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
+        
+    #     start_date = pd.to_datetime(f"{year}-{start_month_num}-01").date()
+    #     if end_month_num == 12:
+    #         end_date = pd.to_datetime(f"{year}-12-31").date()
+    #     else:
+    #         end_date = (pd.to_datetime(f"{year}-{end_month_num+1}-01") - pd.Timedelta(days=1)).date()
+        
+    #     start_hour, end_hour = st.session_state.get("hour_range", (8, 18))
+        
+    #     # Generate the report
+    #     report_bytes = generate_pptx_report(
+    #         df, 
+    #         start_date, 
+    #         end_date, 
+    #         start_hour, 
+    #         end_hour, 
+    #         selected_parameter
+    #     )
+        
+    #     # Offer download
+    #     st.download_button(
+    #         label="📥 Download Report (PowerPoint)",
+    #         data=report_bytes,
+    #         file_name=f"Climate_Analysis_Report_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.pptx",
+    #         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    #         key="download_report"
+    #     )
+        
+        # Reset the flag
+        # st.session_state.generate_report = False
+        
+    # except Exception as e:
 #     st.error(f"❌ Failed to generate report: {str(e)}")
 #     st.session_state.generate_report = False
 
