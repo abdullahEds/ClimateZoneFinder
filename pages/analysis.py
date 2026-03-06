@@ -819,13 +819,16 @@ def parse_epw(epw_text: str) -> tuple:
     return df[["datetime", "dry_bulb_temperature", "relative_humidity", "direct_normal_irradiance", "diffuse_horizontal_irradiance", "global_horizontal_irradiance", "hour"]], metadata
 
 
-def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> None:
+def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> dict:
     """Generate and display an interactive Sun Path Diagram using Plotly.
     
     Args:
         data: DataFrame with datetime and weather data
         metadata: Dictionary containing latitude, longitude, timezone
         chart_type: Type of chart to display - "Direct Normal Radiation", "Global Horizontal Radiation", "Dry Bulb Temperature", or "Sun Path"
+    
+    Returns:
+        Dictionary containing metrics for Shading diagram, or empty dict for other chart types
     """
     try:
         from pvlib import solarposition
@@ -1101,7 +1104,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                         colorscale=colorscale,
                         cmin=colorbar_min,
                         cmax=colorbar_max,
-                        showscale=first_trace,  # Display colorbar on first trace with data
+                        showscale=(first_trace and chart_type != "Shading"),  # Hide colorbar for Shading (binary)
                         colorbar=dict(
                             title=dict(
                                 text=colorbar_title,
@@ -1114,7 +1117,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                             tickvals=tickvals,
                             ticktext=ticktext,
                             tickmode="array"
-                        ),
+                        ) if chart_type != "Shading" else None,
                         opacity=0.7,
                         line=dict(width=0.5)
                     ),
@@ -1127,71 +1130,50 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             first_trace = False  # Only show colorbar on first trace
         
         # ========================
-        # Shading region highlight
+        # Shading metrics calculation (for display below chart)
         # ========================
+        shading_metrics = {}
         if chart_type == "Shading":
-            # Collect all points that require shading (temp > 28°C AND GHI > 315 Wh/m²)
+            # Calculate metrics
             ghi_col = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
             temp_col = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index)).fillna(20)
+            
+            # Total sunshine hours (GHI > 300 Wh/m²)
+            sunshine_mask = ghi_col > 300
+            sunshine_hours = sunshine_mask.sum() / 2  # Each data point is 30 minutes (0.5 hours)
+            
+            # Required shading hours (temp > 28°C AND GHI > 315 Wh/m²)
             shading_mask = (temp_col > 28) & (ghi_col > 315)
-            shade_points = solpos_merged[shading_mask]
-
-            if not shade_points.empty:
-                # Compute summer solstice path to use as upper boundary cap
-                # (shading region must not extend above the summer solstice arc)
-                summer_date = pd.Timestamp("2020-06-21")
-                summer_times = pd.date_range(
-                    summer_date, summer_date + pd.Timedelta("1D"),
-                    freq="5min", tz=tz, inclusive="left"
+            shading_hours = shading_mask.sum() / 2  # Each data point is 30 minutes (0.5 hours)
+            
+            shading_metrics = {
+                "total_sunshine_hours": sunshine_hours,
+                "required_shading_hours": shading_hours
+            }
+            
+            # Add legend items for binary shading colors
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=[None],
+                    theta=[None],
+                    mode="markers",
+                    marker=dict(size=12, color="#FFF9C4", symbol="square"),
+                    name="No Shading",
+                    showlegend=True,
+                    hoverinfo="skip"
                 )
-                summer_sol = solarposition.get_solarposition(summer_times, lat, lon)
-                summer_sol = summer_sol[summer_sol["apparent_elevation"] > 0]
-                summer_sol["r_summer"] = 90 - summer_sol["apparent_elevation"]
-
-                # Per-azimuth binning with a wide window (±9°) to bridge gaps between
-                # hour columns (~15–20° apart) without creating separate blobs.
-                az_step = 2
-                half_w = 9
-                az_bins = np.arange(0, 360, az_step)
-
-                out_az, out_r_outer, out_r_inner = [], [], []
-                for az in az_bins:
-                    shade_near = shade_points[
-                        (shade_points["azimuth"] >= az - half_w) &
-                        (shade_points["azimuth"] < az + half_w)
-                    ]
-                    if shade_near.empty:
-                        continue
-                    summer_near = summer_sol[
-                        (summer_sol["azimuth"] >= az - half_w) &
-                        (summer_sol["azimuth"] < az + half_w)
-                    ]
-                    r_outer = shade_near["r"].max()   # lowest altitude  = outermost edge
-                    r_inner = shade_near["r"].min()   # highest altitude = innermost edge
-                    # Cap inner edge at summer solstice so region stays below the arc
-                    if not summer_near.empty:
-                        r_inner = max(r_inner, summer_near["r_summer"].min())
-                    out_az.append(az)
-                    out_r_outer.append(r_outer)
-                    out_r_inner.append(r_inner)
-
-                if out_az:
-                    region_az = out_az + out_az[::-1] + [out_az[0]]
-                    region_r = out_r_outer + out_r_inner[::-1] + [out_r_outer[0]]
-
-                    fig.add_trace(
-                        go.Scatterpolar(
-                            r=region_r,
-                            theta=region_az,
-                            mode="lines",
-                            fill="toself",
-                            fillcolor="rgba(230, 81, 0, 0.18)",
-                            line=dict(color="rgba(230, 81, 0, 0.45)", width=1.2),
-                            name="Shading Required Zone",
-                            showlegend=True,
-                            hoverinfo="skip",
-                        )
-                    )
+            )
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=[None],
+                    theta=[None],
+                    mode="markers",
+                    marker=dict(size=12, color="#E65100", symbol="square"),
+                    name="Shading Required",
+                    showlegend=True,
+                    hoverinfo="skip"
+                )
+            )
         
         # ========================
         # Add special solar dates (equinoxes and solstices)
@@ -1415,8 +1397,12 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         # Display with Streamlit
         st.plotly_chart(fig, use_container_width=True)
         
+        # Return metrics if available
+        return shading_metrics if chart_type == "Shading" else {}
+        
     except Exception as e:
         st.error(f"Error generating Sun Path Diagram: {str(e)}")
+        return {}
 
 # === MAIN LAYOUT ===
 col_left, col_right = st.columns([0.85, 2.15], gap="small")
@@ -1471,17 +1457,21 @@ try:
         # """, unsafe_allow_html=True)
         
         # Time range (hour of use) slider for diurnal/peak analysis
-        st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
-        hour_range = st.slider(
-            "Select hours (start - end)",
-            min_value=0,
-            max_value=23,
-            value=(8, 18),
-            step=1,
-            key="hour_range",
-            label_visibility="collapsed",
-            width=300
-        )
+        if selected_parameter == "Sun Path":
+            # For Sun Path, always use full 0-23 range
+            hour_range = (0, 23)
+        else:
+            st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
+            hour_range = st.slider(
+                "Select hours (start - end)",
+                min_value=0,
+                max_value=23,
+                value=(8, 18),
+                step=1,
+                key="hour_range",
+                label_visibility="collapsed",
+                width=300
+            )
         
         # Date range selection
         st.markdown('<div class="control-section-header">📅 Date Range</div>', unsafe_allow_html=True)
@@ -1648,7 +1638,27 @@ with col_right:
             ["Sun Path","Dry Bulb Temperature", "Direct Normal Radiation", "Global Horizontal Radiation","Shading"],
             )
         
-        plot_sun_path(df, metadata, chart_type)
+        metrics = plot_sun_path(df, metadata, chart_type)
+        
+        # Display metrics for Shading chart
+        if chart_type == "Shading" and metrics:
+            st.markdown("---")
+            st.markdown("<h4 style='text-align: left;'>📊 Shading Metrics</h4>", unsafe_allow_html=True)
+            metric_col1, metric_col2 = st.columns(2)
+            
+            with metric_col1:
+                st.metric(
+                    label="Total Sunshine Hours",
+                    value=f"{metrics.get('total_sunshine_hours', 0):.1f}",
+                    help="Hours with Global Horizontal Irradiance > 300 Wh/m²"
+                )
+            
+            with metric_col2:
+                st.metric(
+                    label="Required Shading Hours",
+                    value=f"{metrics.get('required_shading_hours', 0):.1f}",
+                    help="Hours where Temperature > 28°C AND GHI > 315 Wh/m²"
+                )
     else:
                 # Create tab buttons
         tabs_col1, tabs_col2, tabs_col3, tabs_col4, tabs_col5 = st.columns(5, gap="small")
