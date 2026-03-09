@@ -290,425 +290,557 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int, end_hour: int, selected_parameter: str):
-    """Generate a PowerPoint report with Dry Bulb and Humidity analysis."""
+def _ppt_remove_all_slides(prs):
+    """Remove every slide from an open Presentation while preserving theme/layouts."""
+    from pptx.oxml.ns import qn
+    sldIdLst = prs.slides._sldIdLst
+    for sldId in list(sldIdLst):
+        rId = sldId.get(qn('r:id'))
+        try:
+            prs.part.drop_rel(rId)
+        except Exception:
+            pass
+        sldIdLst.remove(sldId)
 
-    # Create presentation
-    prs = Presentation()
-    prs.slide_width = Inches(10)
-    prs.slide_height = Inches(7.5)
-    
-    # Define a color scheme
-    DARK_BLUE = RGBColor(44, 90, 160)  # #2c5aa0
-    LIGHT_BLUE = RGBColor(26, 58, 82)  # #1a3a52
-    ACCENT_RED = RGBColor(211, 47, 47)  # #d32f2f
-    TEXT_COLOR = RGBColor(44, 62, 80)  # #2c3e50
-    
-    def add_title_slide(prs, title, subtitle):
-        """Add a title slide."""
-        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = DARK_BLUE
-        
-        # Add title
-        title_box = slide.shapes.add_textbox(Inches(0.5), Inches(2.5), Inches(9), Inches(1.5))
-        title_frame = title_box.text_frame
-        title_frame.text = title
-        title_frame.paragraphs[0].font.size = Pt(54)
-        title_frame.paragraphs[0].font.bold = True
-        title_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
-        
-        # Add subtitle
-        if subtitle:
-            subtitle_box = slide.shapes.add_textbox(Inches(0.5), Inches(4), Inches(9), Inches(2))
-            subtitle_frame = subtitle_box.text_frame
-            subtitle_frame.word_wrap = True
-            subtitle_frame.text = subtitle
-            subtitle_frame.paragraphs[0].font.size = Pt(24)
-            subtitle_frame.paragraphs[0].font.color.rgb = RGBColor(200, 200, 200)
-        
-        return slide
-    
-    def add_content_slide(prs, title, content_func):
-        """Add a content slide with title."""
-        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
-        
-        # Add title bar
-        title_shape = slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(10), Inches(0.8))
-        title_shape.fill.solid()
-        title_shape.fill.fore_color.rgb = LIGHT_BLUE
-        title_shape.line.color.rgb = DARK_BLUE
-        
-        # Add title text
-        title_frame = title_shape.text_frame
-        title_frame.text = title
-        title_frame.paragraphs[0].font.size = Pt(32)
-        title_frame.paragraphs[0].font.bold = True
-        title_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
-        
-        # Call content function to add content
-        content_func(slide)
-        
-        return slide
-    
+
+def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int, end_hour: int, selected_parameter: str, metadata: dict = None):
+    """Generate a PowerPoint report using the Voha template with Dry Bulb, Relative Humidity and Sun Path sections."""
+
+    # ── Resolve paths ──────────────────────────────────────────────────────────
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    except NameError:
+        base_dir = os.getcwd()
+    template_path = os.path.join(base_dir, "Voha Hospitality Climate analysis_v4 (2).pptx")
+    logo_path = os.path.join(base_dir, "EDSlogo.png")
+
+    # ── Open template and strip existing slides ────────────────────────────────
+    if os.path.exists(template_path):
+        prs = Presentation(template_path)
+        _ppt_remove_all_slides(prs)
+    else:
+        prs = Presentation()
+        prs.slide_width = Inches(13.33)
+        prs.slide_height = Inches(7.5)
+
+    BLANK_LAYOUT = prs.slide_layouts[6]
+
+    # ── Colors matching the template ──────────────────────────────────────────
+    TITLE_RED   = RGBColor(0xC0, 0x00, 0x00)   # #C00000 – template title colour
+    DARK_GREY   = RGBColor(0x40, 0x40, 0x40)
+    WHITE       = RGBColor(0xFF, 0xFF, 0xFF)
+    DIVIDER_CLR = RGBColor(0xC0, 0x00, 0x00)
+
+    # Slide canvas size (inches)
+    SW = prs.slide_width.inches   # ≈ 13.33
+    SH = prs.slide_height.inches  # ≈ 7.50
+
+    # Logo dimensions (maintain aspect ratio 550:308 ≈ 1.786)
+    LOGO_H  = 0.40  # inches
+    LOGO_W  = LOGO_H * (550 / 308)
+    LOGO_L  = 0.18
+    LOGO_T  = SH - LOGO_H - 0.12
+
+    def _add_logo(slide):
+        """Place EDSlogo.png at the bottom-left corner of the slide."""
+        if os.path.exists(logo_path):
+            slide.shapes.add_picture(
+                logo_path,
+                Inches(LOGO_L), Inches(LOGO_T),
+                width=Inches(LOGO_W), height=Inches(LOGO_H)
+            )
+
+    def _add_slide_title(slide, text, left=0.27, top=0.13, width=None, height=0.45):
+        """Add section title in the template's dark-red style."""
+        if width is None:
+            width = SW - left - 0.3
+        tb = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+        tf = tb.text_frame
+        tf.word_wrap = False
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = text
+        run.font.size = Pt(20)
+        run.font.bold = True
+        run.font.color.rgb = TITLE_RED
+
+    def _add_divider(slide, top_inches):
+        """Thin horizontal rule matching template style."""
+        line = slide.shapes.add_shape(
+            1, Inches(0.27), Inches(top_inches),
+            Inches(SW - 0.54), Inches(0.03)
+        )
+        line.fill.solid()
+        line.fill.fore_color.rgb = DIVIDER_CLR
+        line.line.fill.background()
+
+    def _save_mpl_figure(fig) -> str:
+        """Save a matplotlib figure to a temp PNG and return its path."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            fig.savefig(tmp.name, dpi=130, bbox_inches='tight', facecolor='white')
+            return tmp.name
+
+    def _err_box(slide, err):
+        tb = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(SW - 1), Inches(2))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = f"Visualization error: {err}"
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
+
     # Filter data for period
     filtered_df = df[
         (df["datetime"].dt.date >= start_date) &
         (df["datetime"].dt.date <= end_date) &
         (df["hour"].between(start_hour, end_hour))
     ]
-    
-    # === TITLE SLIDE ===
-    add_title_slide(
-        prs, 
-        "Climate Analysis Report",
-        f"Period: {start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\nHours: {start_hour:02d}:00 - {end_hour:02d}:00"
-    )
-    
-    # === ANNUAL TREND CHART SLIDE (DRY BULB) ===
-    def add_temp_chart_content(slide):
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # COVER SLIDE
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _make_cover_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+
+        # Title block background
+        bg = slide.shapes.add_shape(1, Inches(0), Inches(2.5), Inches(SW), Inches(2.5))
+        bg.fill.solid()
+        bg.fill.fore_color.rgb = TITLE_RED
+        bg.line.fill.background()
+
+        # Main title
+        tb = slide.shapes.add_textbox(Inches(0.6), Inches(2.7), Inches(SW - 1.2), Inches(1.2))
+        tf = tb.text_frame
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = "Climate Analysis Report"
+        run.font.size = Pt(40)
+        run.font.bold = True
+        run.font.color.rgb = WHITE
+
+        # Subtitle
+        tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.85), Inches(SW - 1.2), Inches(0.7))
+        tf2 = tb2.text_frame
+        p2 = tf2.paragraphs[0]
+        run2 = p2.add_run()
+        run2.text = (
+            f"Period: {start_date.strftime('%B %d')} \u2013 {end_date.strftime('%B %d, %Y')}  "
+            f"|  Hours: {start_hour:02d}:00 \u2013 {end_hour:02d}:00"
+        )
+        run2.font.size = Pt(16)
+        run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
+
+        # Bottom info line
+        tb3 = slide.shapes.add_textbox(Inches(0.6), Inches(6.5), Inches(SW - 1.2), Inches(0.4))
+        tf3 = tb3.text_frame
+        p3 = tf3.paragraphs[0]
+        run3 = p3.add_run()
+        run3.text = "Sections: Dry Bulb Temperature  |  Relative Humidity  |  Sun Path"
+        run3.font.size = Pt(11)
+        run3.font.color.rgb = DARK_GREY
+
+        _add_logo(slide)
+
+    _make_cover_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SECTION 1 – DRY BULB TEMPERATURE
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # --- 1a: Annual Trend Chart ---
+    def _make_dbt_trend_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Dry Bulb Temperature")
+        _add_divider(slide, 0.62)
+
         try:
-            # Compute daily stats
-            daily_stats = df.groupby("doy").agg({
-                "dry_bulb_temperature": ["min", "max", "mean"],
-            }).reset_index()
-            
-            daily_stats.columns = ["doy", "temp_min", "temp_max", "temp_avg"]
-            
-            # Calculate ASHRAE comfort bands
+            daily_stats = df.groupby("doy").agg(
+                temp_min=("dry_bulb_temperature", "min"),
+                temp_max=("dry_bulb_temperature", "max"),
+                temp_avg=("dry_bulb_temperature", "mean"),
+            ).reset_index()
+
             daily_avg = df.groupby("doy")["dry_bulb_temperature"].mean()
             comfort_line = daily_avg.rolling(window=7, center=True).mean()
-            comfort_80_lower = comfort_line - 3.5
-            comfort_80_upper = comfort_line + 3.5
-            comfort_90_lower = comfort_line - 2.5
-            comfort_90_upper = comfort_line + 2.5
-            
-            # Create matplotlib figure
-            fig, ax = plt.subplots(figsize=(12, 5.5), dpi=120)
-            
-            # Calculate date range for filtering
-            start_month_num = start_date.month
-            end_month_num = end_date.month
-            start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
-            if end_month_num == 12:
-                end_doy = 366
-            else:
-                end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
-            
-            # Plot ASHRAE comfort bands
-            ax.fill_between(daily_stats["doy"], comfort_80_lower, comfort_80_upper, 
-                           alpha=0.2, color='gray', label='ASHRAE 80% Comfort')
-            ax.fill_between(daily_stats["doy"], comfort_90_lower, comfort_90_upper, 
-                           alpha=0.3, color='gray', label='ASHRAE 90% Comfort')
-            
-            # Plot temperature range
+
+            start_doy = pd.to_datetime(f"2024-{start_date.month:02d}-01").dayofyear
+            end_doy = (
+                366 if end_date.month == 12
+                else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
+            )
+
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            ax.fill_between(daily_stats["doy"], comfort_line - 3.5, comfort_line + 3.5,
+                            alpha=0.18, color='gray', label='ASHRAE 80% Comfort')
+            ax.fill_between(daily_stats["doy"], comfort_line - 2.5, comfort_line + 2.5,
+                            alpha=0.28, color='gray', label='ASHRAE 90% Comfort')
             ax.fill_between(daily_stats["doy"], daily_stats["temp_min"], daily_stats["temp_max"],
-                           alpha=0.35, color='#FFB3B3', label='Daily Temp Range')
-            
-            # Plot average line
-            ax.plot(daily_stats["doy"], daily_stats["temp_avg"], 
-                   color='#d32f2f', linewidth=2.5, label='Daily Average', zorder=3)
-            
-            # Highlight selected period
-            ax.axvspan(start_doy, end_doy, alpha=0.08, color='#2c5aa0')
-            
-            ax.set_xlabel('Day of Year', fontsize=11, fontweight='bold')
+                            alpha=0.30, color='#FFB3B3', label='Daily Temp Range')
+            ax.plot(daily_stats["doy"], daily_stats["temp_avg"],
+                    color='#C00000', linewidth=2.2, label='Daily Average', zorder=3)
+            ax.axvspan(start_doy, end_doy, alpha=0.07, color='#2c5aa0', label='Selected Period')
+
+            months_doy = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            ax.set_xticks(months_doy)
+            ax.set_xticklabels(months_lbl, fontsize=10)
             ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
-            ax.set_title('Annual Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=15)
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=4, frameon=True, fontsize=10)
-            ax.grid(True, alpha=0.3, linestyle='--')
+            ax.set_title('Annual Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=5, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--')
             ax.set_facecolor('#fafafa')
             fig.patch.set_facecolor('white')
-            
             plt.tight_layout()
-            
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                fig.savefig(tmp.name, dpi=120, bbox_inches='tight', facecolor='white')
-                tmp_path = tmp.name
-            
+
+            tmp = _save_mpl_figure(fig)
             plt.close(fig)
-            
-            # Add image to slide
-            slide.shapes.add_picture(tmp_path, Inches(0.3), Inches(1.0), width=Inches(9.4), height=Inches(5.8))
-            
-            # Clean up
-            os.unlink(tmp_path)
-            
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.8))
+            os.unlink(tmp)
         except Exception as e:
-            text_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.5), Inches(8.4), Inches(5))
-            text_frame = text_box.text_frame
-            text_frame.word_wrap = True
-            text_frame.text = f"Chart visualization error: {str(e)}"
-            text_frame.paragraphs[0].font.size = Pt(12)
-            text_frame.paragraphs[0].font.color.rgb = TEXT_COLOR
-    
-    add_content_slide(prs, "Annual Trend - Dry Bulb Temperature", add_temp_chart_content)
-    
-    # === ANNUAL TREND CHART SLIDE (HUMIDITY) ===
-    def add_humidity_chart_content(slide):
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_dbt_trend_slide()
+
+    # --- 1b: Monthly Averages Bar Chart ---
+    def _make_dbt_monthly_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Dry Bulb Temperature – Monthly Summary")
+        _add_divider(slide, 0.62)
+
         try:
-            # Compute daily stats for humidity
-            daily_stats = df.groupby("doy").agg({
-                "relative_humidity": ["min", "max", "mean"],
-            }).reset_index()
-            
-            daily_stats.columns = ["doy", "rh_min", "rh_max", "rh_avg"]
-            
-            # Create matplotlib figure
-            fig, ax = plt.subplots(figsize=(12, 5.5), dpi=120)
-            
-            # Calculate date range for filtering
-            start_month_num = start_date.month
-            end_month_num = end_date.month
-            start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
-            if end_month_num == 12:
-                end_doy = 366
-            else:
-                end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
-            
-            # Plot risk zones
-            ax.axhspan(75, 100, alpha=0.15, color='#FF6B6B', label='Condensation Risk (>75%)')
-            ax.axhspan(60, 75, alpha=0.15, color='#FFA500', label='High RH (60-75%)')
-            ax.axhspan(30, 60, alpha=0.15, color='#4ECDC4', label='Comfortable (30-60%)')
-            ax.axhspan(0, 30, alpha=0.15, color='#FFD93D', label='Low RH (<30%)')
-            
-            # Plot humidity range
-            ax.fill_between(daily_stats["doy"], daily_stats["rh_min"], daily_stats["rh_max"],
-                           alpha=0.35, color='#0099ff', label='Daily RH Range')
-            
-            # Plot average line
-            ax.plot(daily_stats["doy"], daily_stats["rh_avg"], 
-                   color='#0066cc', linewidth=2.5, label='Daily Average RH', zorder=3)
-            
-            # Highlight selected period
-            ax.axvspan(start_doy, end_doy, alpha=0.08, color='#2c5aa0')
-            
-            ax.set_xlabel('Day of Year', fontsize=11, fontweight='bold')
-            ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
-            ax.set_title('Annual Relative Humidity Trend', fontsize=13, fontweight='bold', pad=15)
-            ax.set_ylim(0, 100)
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=4, frameon=True, fontsize=10)
-            ax.grid(True, alpha=0.3, linestyle='--')
+            monthly = df.groupby("month").agg(
+                t_min=("dry_bulb_temperature", "min"),
+                t_max=("dry_bulb_temperature", "max"),
+                t_avg=("dry_bulb_temperature", "mean"),
+            ).reset_index()
+
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            x = np.arange(12)
+
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            bar_w = 0.30
+            ax.bar(x - bar_w, monthly["t_min"], bar_w, color='#90CAF9', label='Min Temp')
+            ax.bar(x,          monthly["t_avg"], bar_w, color='#C00000', label='Avg Temp', alpha=0.85)
+            ax.bar(x + bar_w,  monthly["t_max"], bar_w, color='#EF9A9A', label='Max Temp')
+
+            # Comfort band zone
+            ax.axhspan(20, 26, alpha=0.10, color='green', label='Comfort Band (20–26°C)')
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(months_lbl, fontsize=10)
+            ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
+            ax.set_title('Monthly Temperature Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--', axis='y')
             ax.set_facecolor('#fafafa')
             fig.patch.set_facecolor('white')
-            
+
+            # Annotate period months
+            for m in range(start_date.month, end_date.month + 1):
+                ax.axvspan(m - 1 - 0.5, m - 1 + 0.5, alpha=0.06, color='navy')
+
             plt.tight_layout()
-            
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                fig.savefig(tmp.name, dpi=120, bbox_inches='tight', facecolor='white')
-                tmp_path = tmp.name
-            
+            tmp = _save_mpl_figure(fig)
             plt.close(fig)
-            
-            # Add image to slide
-            slide.shapes.add_picture(tmp_path, Inches(0.3), Inches(1.0), width=Inches(9.4), height=Inches(5.8))
-            
-            # Clean up
-            os.unlink(tmp_path)
-            
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.5))
+            os.unlink(tmp)
+
+            # Key stats text box (bottom right)
+            if not filtered_df.empty:
+                stats_txt = (
+                    f"Selected Period   Min: {filtered_df['dry_bulb_temperature'].min():.1f}°C  "
+                    f"Avg: {filtered_df['dry_bulb_temperature'].mean():.1f}°C  "
+                    f"Max: {filtered_df['dry_bulb_temperature'].max():.1f}°C  "
+                    f" |  Ann. CDD24: {(df['dry_bulb_temperature'] - 24).clip(lower=0).sum():.0f}   "
+                    f"HDD18: {(18 - df['dry_bulb_temperature']).clip(lower=0).sum():.0f}"
+                )
+                tb = slide.shapes.add_textbox(Inches(0.27), Inches(6.35), Inches(SW - 0.54), Inches(0.35))
+                tf = tb.text_frame
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = stats_txt
+                run.font.size = Pt(9)
+                run.font.color.rgb = DARK_GREY
+
         except Exception as e:
-            text_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.5), Inches(8.4), Inches(5))
-            text_frame = text_box.text_frame
-            text_frame.word_wrap = True
-            text_frame.text = f"Chart visualization error: {str(e)}"
-            text_frame.paragraphs[0].font.size = Pt(12)
-            text_frame.paragraphs[0].font.color.rgb = TEXT_COLOR
-    
-    add_content_slide(prs, "Annual Trend - Relative Humidity", add_humidity_chart_content)
-    
-    # === DRY BULB TEMPERATURE ANALYSIS ===
-    def add_temp_content(slide):
-        if not filtered_df.empty:
-            min_temp = filtered_df["dry_bulb_temperature"].min()
-            max_temp = filtered_df["dry_bulb_temperature"].max()
-            avg_temp = filtered_df["dry_bulb_temperature"].mean()
-            
-            # Calculate HDD18 and CDD24 for full year
-            hdd18 = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum()
-            cdd24 = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
-            
-            hdd18_filtered = (18 - filtered_df["dry_bulb_temperature"]).clip(lower=0).sum()
-            cdd24_filtered = (filtered_df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
-            
-            # Create metrics with better layout - 2 rows of 4 cards
-            metrics = [
-                ("Min Temp", f"{min_temp:.1f}°C", "#FF9800", RGBColor(255, 152, 0)),
-                ("Max Temp", f"{max_temp:.1f}°C", "#F44336", RGBColor(244, 67, 54)),
-                ("Avg Temp", f"{avg_temp:.1f}°C", "#2196F3", RGBColor(33, 150, 243)),
-                ("Diurnal Range", f"{max_temp - min_temp:.1f}°C", "#9C27B0", RGBColor(156, 39, 176)),
-                ("HDD18 (Annual)", f"{hdd18:.0f}", "#1976D2", RGBColor(25, 118, 210)),
-                ("CDD24 (Annual)", f"{cdd24:.0f}", "#D32F2F", RGBColor(211, 47, 47)),
-                ("HDD18 (Period)", f"{hdd18_filtered:.0f}", "#0097A7", RGBColor(0, 150, 167)),
-                ("CDD24 (Period)", f"{cdd24_filtered:.0f}", "#C62828", RGBColor(198, 40, 40)),
-            ]
-            
-            for idx, (label, value, hex_color, rgb_color) in enumerate(metrics):
-                col = idx % 4
-                row = idx // 4
-                
-                left = Inches(0.4 + col * 2.35)
-                top = Inches(1.1 + row * 1.6)
-                box_width = Inches(2.15)
-                box_height = Inches(1.4)
-                
-                # Add rounded rectangle box with gradient-like effect using border
-                box = slide.shapes.add_shape(1, left, top, box_width, box_height)
-                box.fill.solid()
-                box.fill.fore_color.rgb = RGBColor(255, 255, 255)  # White background
-                box.line.color.rgb = rgb_color
-                box.line.width = Pt(3)
-                
-                # Add colored top border for visual appeal
-                top_bar = slide.shapes.add_shape(1, left, top, box_width, Inches(0.25))
-                top_bar.fill.solid()
-                top_bar.fill.fore_color.rgb = rgb_color
-                top_bar.line.color.rgb = rgb_color
-                
-                # Add label
-                label_frame = box.text_frame
-                label_frame.clear()
-                label_frame.word_wrap = True
-                label_frame.margin_top = Inches(0.08)
-                label_frame.margin_left = Inches(0.1)
-                label_frame.margin_right = Inches(0.1)
-                
-                # Label
-                p = label_frame.paragraphs[0]
-                p.text = label
-                p.font.size = Pt(9)
-                p.font.bold = True
-                p.font.color.rgb = rgb_color
-                
-                # Value
-                p2 = label_frame.add_paragraph()
-                p2.text = value
-                p2.font.size = Pt(16)
-                p2.font.bold = True
-                p2.font.color.rgb = TEXT_COLOR
-                p2.space_before = Pt(4)
-    
-    add_content_slide(prs, "Dry Bulb Temperature Analysis", add_temp_content)
-    
-    # === HUMIDITY ANALYSIS ===
-    def add_humidity_content(slide):
-        if not filtered_df.empty:
-            # Full year metrics
-            high_humidity_annual = len(df[df["relative_humidity"] > 60])
-            condensation_risk_annual = len(df[df["relative_humidity"] > 75])
-            low_humidity_annual = len(df[df["relative_humidity"] < 30])
-            avg_rh_annual = df["relative_humidity"].mean()
-            
-            # Period metrics
-            min_rh = filtered_df["relative_humidity"].min()
-            max_rh = filtered_df["relative_humidity"].max()
-            avg_rh = filtered_df["relative_humidity"].mean()
-            high_humidity_filtered = len(filtered_df[filtered_df["relative_humidity"] > 60])
-            condensation_risk_filtered = len(filtered_df[filtered_df["relative_humidity"] > 75])
-            
-            # Create metrics with better layout
-            metrics = [
-                ("Min RH", f"{min_rh:.0f}%", "#4CAF50", RGBColor(76, 175, 80)),
-                ("Max RH", f"{max_rh:.0f}%", "#FF5722", RGBColor(255, 87, 34)),
-                ("Avg RH", f"{avg_rh:.0f}%", "#00BCD4", RGBColor(0, 188, 212)),
-                ("Low RH (<30%)", f"{low_humidity_annual:.0f} hrs", "#FFB74D", RGBColor(255, 183, 77)),
-                ("High RH (>60%)", f"{high_humidity_annual:.0f} hrs", "#EF5350", RGBColor(239, 83, 80)),
-                ("Condensation (>75%)", f"{condensation_risk_annual:.0f} hrs", "#E53935", RGBColor(229, 57, 53)),
-                ("High RH (Period)", f"{high_humidity_filtered:.0f} hrs", "#AB47BC", RGBColor(171, 71, 188)),
-                ("Condensation (Period)", f"{condensation_risk_filtered:.0f} hrs", "#8E24AA", RGBColor(142, 36, 170)),
-            ]
-            
-            for idx, (label, value, hex_color, rgb_color) in enumerate(metrics):
-                col = idx % 4
-                row = idx // 4
-                
-                left = Inches(0.4 + col * 2.35)
-                top = Inches(1.1 + row * 1.6)
-                box_width = Inches(2.15)
-                box_height = Inches(1.4)
-                
-                # Add rounded rectangle box
-                box = slide.shapes.add_shape(1, left, top, box_width, box_height)
-                box.fill.solid()
-                box.fill.fore_color.rgb = RGBColor(255, 255, 255)  # White background
-                box.line.color.rgb = rgb_color
-                box.line.width = Pt(3)
-                
-                # Add colored top border
-                top_bar = slide.shapes.add_shape(1, left, top, box_width, Inches(0.25))
-                top_bar.fill.solid()
-                top_bar.fill.fore_color.rgb = rgb_color
-                top_bar.line.color.rgb = rgb_color
-                
-                # Add label
-                label_frame = box.text_frame
-                label_frame.clear()
-                label_frame.word_wrap = True
-                label_frame.margin_top = Inches(0.08)
-                label_frame.margin_left = Inches(0.1)
-                label_frame.margin_right = Inches(0.1)
-                
-                # Label
-                p = label_frame.paragraphs[0]
-                p.text = label
-                p.font.size = Pt(9)
-                p.font.bold = True
-                p.font.color.rgb = rgb_color
-                
-                # Value
-                p2 = label_frame.add_paragraph()
-                p2.text = value
-                p2.font.size = Pt(16)
-                p2.font.bold = True
-                p2.font.color.rgb = TEXT_COLOR
-                p2.space_before = Pt(4)
-    
-    add_content_slide(prs, "Humidity Analysis", add_humidity_content)
-    
-    # === SUMMARY SLIDE ===
-    def add_summary_content(slide):
-        summary_text = f"""
-Period Analyzed: {start_date.strftime('%B %d')} - {end_date.strftime('%B %d')}
-Operating Hours: {start_hour:02d}:00 - {end_hour:02d}:00
+            _err_box(slide, e)
 
-Dry Bulb Temperature:
-• Range: {filtered_df['dry_bulb_temperature'].min():.2f}°C to {filtered_df['dry_bulb_temperature'].max():.2f}°C
-• Average: {filtered_df['dry_bulb_temperature'].mean():.2f}°C
-• Hours above 28°C: {len(filtered_df[filtered_df['dry_bulb_temperature'] > 28])}
-• Hours below 12°C: {len(filtered_df[filtered_df['dry_bulb_temperature'] < 12])}
+        _add_logo(slide)
 
-Relative Humidity:
-• Range: {filtered_df['relative_humidity'].min():.1f}% to {filtered_df['relative_humidity'].max():.1f}%
-• Average: {filtered_df['relative_humidity'].mean():.1f}%
-• Hours with High RH (>60%): {len(filtered_df[filtered_df['relative_humidity'] > 60])}
-• Hours with Condensation Risk (>75%): {len(filtered_df[filtered_df['relative_humidity'] > 75])}
-        """
-        
-        text_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.2), Inches(8.4), Inches(5.8))
-        text_frame = text_box.text_frame
-        text_frame.word_wrap = True
-        text_frame.text = summary_text
-        
-        for paragraph in text_frame.paragraphs:
-            paragraph.font.size = Pt(12)
-            paragraph.font.color.rgb = TEXT_COLOR
-            if paragraph.text.startswith("•"):
-                paragraph.level = 1
-                paragraph.font.size = Pt(11)
-            elif ":" in paragraph.text and not paragraph.text.startswith("•"):
-                paragraph.font.bold = True
-                paragraph.font.size = Pt(13)
-    
-    add_content_slide(prs, "Summary", add_summary_content)
-    
-    # Save to bytes
+    _make_dbt_monthly_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SECTION 2 – RELATIVE HUMIDITY
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # --- 2a: Annual Trend Chart ---
+    def _make_rh_trend_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Relative Humidity")
+        _add_divider(slide, 0.62)
+
+        try:
+            daily_stats = df.groupby("doy").agg(
+                rh_min=("relative_humidity", "min"),
+                rh_max=("relative_humidity", "max"),
+                rh_avg=("relative_humidity", "mean"),
+            ).reset_index()
+
+            start_doy = pd.to_datetime(f"2024-{start_date.month:02d}-01").dayofyear
+            end_doy = (
+                366 if end_date.month == 12
+                else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
+            )
+
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            ax.axhspan(75, 100, alpha=0.13, color='#FF6B6B', label='Condensation Risk (>75%)')
+            ax.axhspan(60,  75, alpha=0.13, color='#FFA500', label='High RH (60–75%)')
+            ax.axhspan(30,  60, alpha=0.13, color='#4ECDC4', label='Comfortable (30–60%)')
+            ax.axhspan( 0,  30, alpha=0.13, color='#FFD93D', label='Low RH (<30%)')
+
+            ax.fill_between(daily_stats["doy"], daily_stats["rh_min"], daily_stats["rh_max"],
+                            alpha=0.28, color='#0099ff', label='Daily RH Range')
+            ax.plot(daily_stats["doy"], daily_stats["rh_avg"],
+                    color='#0066cc', linewidth=2.2, label='Daily Average RH', zorder=3)
+            ax.axvspan(start_doy, end_doy, alpha=0.07, color='#2c5aa0', label='Selected Period')
+
+            months_doy = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            ax.set_xticks(months_doy)
+            ax.set_xticklabels(months_lbl, fontsize=10)
+            ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
+            ax.set_ylim(0, 100)
+            ax.set_title('Annual Relative Humidity Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=4, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--')
+            ax.set_facecolor('#fafafa')
+            fig.patch.set_facecolor('white')
+            plt.tight_layout()
+
+            tmp = _save_mpl_figure(fig)
+            plt.close(fig)
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.8))
+            os.unlink(tmp)
+        except Exception as e:
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_rh_trend_slide()
+
+    # --- 2b: Monthly RH Bar Chart ---
+    def _make_rh_monthly_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Relative Humidity – Monthly Summary")
+        _add_divider(slide, 0.62)
+
+        try:
+            monthly_rh = df.groupby("month").agg(
+                rh_min=("relative_humidity", "min"),
+                rh_max=("relative_humidity", "max"),
+                rh_avg=("relative_humidity", "mean"),
+            ).reset_index()
+
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            x = np.arange(12)
+
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            bar_w = 0.30
+            ax.bar(x - bar_w, monthly_rh["rh_min"], bar_w, color='#AED6F1', label='Min RH')
+            ax.bar(x,          monthly_rh["rh_avg"], bar_w, color='#0066cc', label='Avg RH', alpha=0.85)
+            ax.bar(x + bar_w,  monthly_rh["rh_max"], bar_w, color='#5DADE2', label='Max RH')
+
+            ax.axhspan(30, 60, alpha=0.10, color='green', label='Comfortable (30–60%)')
+            ax.axhline(75, color='#E74C3C', linewidth=1.2, linestyle='--', label='Condensation Threshold (75%)')
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(months_lbl, fontsize=10)
+            ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
+            ax.set_ylim(0, 110)
+            ax.set_title('Monthly Relative Humidity Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--', axis='y')
+            ax.set_facecolor('#fafafa')
+            fig.patch.set_facecolor('white')
+
+            for m in range(start_date.month, end_date.month + 1):
+                ax.axvspan(m - 1 - 0.5, m - 1 + 0.5, alpha=0.06, color='navy')
+
+            plt.tight_layout()
+            tmp = _save_mpl_figure(fig)
+            plt.close(fig)
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.5))
+            os.unlink(tmp)
+
+            if not filtered_df.empty:
+                stats_txt = (
+                    f"Selected Period   Min RH: {filtered_df['relative_humidity'].min():.0f}%  "
+                    f"Avg RH: {filtered_df['relative_humidity'].mean():.0f}%  "
+                    f"Max RH: {filtered_df['relative_humidity'].max():.0f}%  "
+                    f" |  High RH hrs (>60%): {len(filtered_df[filtered_df['relative_humidity'] > 60])}  "
+                    f"Condensation risk hrs (>75%): {len(filtered_df[filtered_df['relative_humidity'] > 75])}"
+                )
+                tb = slide.shapes.add_textbox(Inches(0.27), Inches(6.35), Inches(SW - 0.54), Inches(0.35))
+                tf = tb.text_frame
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = stats_txt
+                run.font.size = Pt(9)
+                run.font.color.rgb = DARK_GREY
+
+        except Exception as e:
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_rh_monthly_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SECTION 3 – SUN PATH
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _make_sun_path_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Sun Path Diagram")
+        _add_divider(slide, 0.62)
+
+        _meta = metadata or {}
+        lat = _meta.get("latitude")
+        lon = _meta.get("longitude")
+        tz_str = _meta.get("timezone", "UTC")
+
+        if lat is None or lon is None:
+            _err_box(slide, "Latitude/Longitude not available from EPW metadata.")
+            _add_logo(slide)
+            return
+
+        try:
+            from pvlib import solarposition as _solpos_lib
+            import pytz as _pytz
+
+            try:
+                _tz = _pytz.timezone(tz_str)
+            except Exception:
+                _tz = _pytz.UTC
+
+            times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left")
+            sol = _solpos_lib.get_solarposition(times, lat, lon)
+            sol = sol[sol["apparent_elevation"] > 0].copy()
+            sol["r"] = 90 - sol["apparent_elevation"]
+
+            # Build a matplotlib polar sun path chart (clean, static, print-ready)
+            fig = plt.figure(figsize=(8.5, 7.2), dpi=130, facecolor='white')
+            ax = fig.add_subplot(111, projection='polar')
+            ax.set_theta_zero_location('N')
+            ax.set_theta_direction(-1)   # clockwise = compass convention
+            ax.set_ylim(0, 90)
+            ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
+            ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
+                               fontsize=7, color='#555')
+            ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
+            ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=10, fontweight='bold')
+            ax.set_facecolor('#F0F4F8')
+            ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
+
+            # Scatter all-year sun positions coloured by day-of-year
+            sc = ax.scatter(
+                np.radians(sol["azimuth"].values),
+                sol["r"].values,
+                c=sol.index.dayofyear,
+                cmap='YlOrRd',
+                s=1.0,
+                alpha=0.55,
+                vmin=1, vmax=365,
+                linewidths=0,
+                zorder=2,
+            )
+            cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.75)
+            cbar.set_label('Day of Year', fontsize=9)
+            cbar.set_ticks([1, 91, 182, 273, 365])
+            cbar.set_ticklabels(['1\n(Jan)', '91\n(Apr)', '182\n(Jul)', '273\n(Oct)', '365\n(Dec)'])
+
+            # Key date arcs
+            key_dates = [
+                ("Mar 21 (Spring Equinox)", "2020-03-21", "#FF9500", 1.6),
+                ("Jun 21 (Summer Solstice)", "2020-06-21", "#CC0000", 2.0),
+                ("Dec 21 (Winter Solstice)", "2020-12-21", "#0066CC", 2.0),
+            ]
+            for lbl, dstr, col, lw in key_dates:
+                dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
+                ks = _solpos_lib.get_solarposition(dt, lat, lon)
+                ks = ks[ks["apparent_elevation"] > 0]
+                if not ks.empty:
+                    ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
+                            color=col, linewidth=lw, label=lbl, zorder=4)
+
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.06), ncol=3,
+                      frameon=True, fontsize=8, borderaxespad=0)
+            ax.set_title(f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
+                         fontsize=11, fontweight='bold', color='#333', pad=14)
+
+            plt.tight_layout()
+            tmp = _save_mpl_figure(fig)
+            plt.close(fig)
+
+            # Centre the sun path diagram on the slide
+            img_w = SW * 0.62
+            img_h = SH * 0.83
+            img_l = (SW - img_w) / 2
+            img_t = 0.72
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_w), height=Inches(img_h))
+            os.unlink(tmp)
+
+            # Annotation panel on the right
+            ann_l = img_l + img_w + 0.2
+            ann_w = SW - ann_l - 0.27
+
+            def _ann(slide, text, top, size=9, bold=False, color=None):
+                tb = slide.shapes.add_textbox(Inches(ann_l), Inches(top), Inches(ann_w), Inches(0.38))
+                tf = tb.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = text
+                run.font.size = Pt(size)
+                run.font.bold = bold
+                run.font.color.rgb = color or DARK_GREY
+
+            _ann(slide, "Location", 0.75, size=8, bold=True, color=TITLE_RED)
+            _ann(slide, f"Latitude:   {lat:.3f}\u00b0", 1.05, size=8)
+            _ann(slide, f"Longitude: {lon:.3f}\u00b0", 1.36, size=8)
+
+            _ann(slide, "Key Dates", 1.80, size=8, bold=True, color=TITLE_RED)
+            _ann(slide, "\u25a0  Mar 21 – Spring Equinox", 2.10, size=8)
+            _ann(slide, "\u25a0  Jun 21 – Summer Solstice", 2.40, size=8)
+            _ann(slide, "\u25a0  Dec 21 – Winter Solstice", 2.70, size=8)
+
+            # Summer / Winter altitude stats
+            summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz)
+            ssum = _solpos_lib.get_solarposition(summer_dt, lat, lon)
+            noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
+
+            winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz)
+            swin = _solpos_lib.get_solarposition(winter_dt, lat, lon)
+            noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
+
+            _ann(slide, "Noon Altitudes", 3.15, size=8, bold=True, color=TITLE_RED)
+            _ann(slide, f"Summer Solstice: {noon_alt_sum:.1f}\u00b0", 3.45, size=8)
+            _ann(slide, f"Winter Solstice: {noon_alt_win:.1f}\u00b0", 3.75, size=8)
+
+        except Exception as e:
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_sun_path_slide()
+
+    # ── Save ───────────────────────────────────────────────────────────────────
     report_bytes = io.BytesIO()
     prs.save(report_bytes)
     report_bytes.seek(0)
-    
     return report_bytes
 
 def convert_epw_timezone(tz_offset):
@@ -1844,7 +1976,8 @@ try:
                 end_date, 
                 start_hour, 
                 end_hour, 
-                selected_parameter
+                selected_parameter,
+                metadata=metadata
             )
             
             # Offer download
