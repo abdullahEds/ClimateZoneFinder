@@ -837,6 +837,90 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
 
     _make_sun_path_slide()
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ANNEXURE SLIDE – About EDS, Disclaimer, Acknowledgement
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _make_annexure_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Annexure")
+        _add_divider(slide, 0.62)
+
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        tf = tb.text_frame
+        tf.word_wrap = True
+
+        # About EDS
+        p = tf.paragraphs[0]
+        p.text = "About EDS"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_after = Pt(6)
+
+        p = tf.add_paragraph()
+        p.text = "Environmental Design Solutions [EDS] is a sustainability advisory firm. Since 2002, EDS has worked on over 500 green building and energy efficiency projects worldwide. The team focuses on climate change mitigation, low-carbon design, building simulation, performance audits, and capacity building. EDS continues to contribute to the buildings community with useful tools through its IT services."
+        p.font.size = Pt(10)
+        p.font.color.rgb = DARK_GREY
+        p.line_spacing = 1.2
+        p.space_after = Pt(8)
+        p.level = 0
+
+        # Disclaimer
+        p = tf.add_paragraph()
+        p.text = "Disclaimer"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(4)
+        p.space_after = Pt(4)
+
+        disclaimer_items = [
+            "Climate Zone Analyser is an outcome of the best efforts of building simulation experts at EDS.",
+            "\u2022  EDS does not assume responsibility for outcomes from its use. By using this Application, the User indemnifies EDS against any damages.",
+            "\u2022  EDS does not guarantee uninterrupted availability. By using this Application, the User agrees to share uploaded information with EDS for analysis and research purposes.",
+            "\u2022  Open-source resources used: Clima - Berkley, Streamlit, Python",
+            "\u2022  EDS is not liable to inform Users about updates to the Application or underlying resources"
+        ]
+
+        for item in disclaimer_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        # Acknowledgement
+        p = tf.add_paragraph()
+        p.text = "Acknowledgement"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(6)
+        p.space_after = Pt(4)
+
+        ack_items = [
+            "\u2022  Betti, G., et al. CBE Clima Tool Build. Simul. (2023). https://doi.org/10.1007/s12273-023-1090-5",
+            "\u2022  Streamlit, \u00a9 Streamlit Inc., licensed under Apache 2.0",
+            "\u2022  Python \u00a9 Python Software Foundation, licensed under PSF License Version 2"
+        ]
+
+        for item in ack_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        _add_logo(slide)
+
+    _make_annexure_slide()
+
     # ── Save ───────────────────────────────────────────────────────────────────
     report_bytes = io.BytesIO()
     prs.save(report_bytes)
@@ -1357,6 +1441,90 @@ def generate_shading_pptx_report(
         _add_logo(slide)
 
     _shading_masks_slide()
+
+    # ═══════════════════════════════════════════════════════════
+    # ANNEXURE SLIDE – About EDS, Disclaimer, Acknowledgement
+    # ═══════════════════════════════════════════════════════════
+    def _make_annexure_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Annexure")
+        _divider(slide, 0.62)
+
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        tf = tb.text_frame
+        tf.word_wrap = True
+
+        # About EDS
+        p = tf.paragraphs[0]
+        p.text = "About EDS"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_after = Pt(6)
+
+        p = tf.add_paragraph()
+        p.text = "Environmental Design Solutions [EDS] is a sustainability advisory firm. Since 2002, EDS has worked on over 500 green building and energy efficiency projects worldwide. The team focuses on climate change mitigation, low-carbon design, building simulation, performance audits, and capacity building. EDS continues to contribute to the buildings community with useful tools through its IT services."
+        p.font.size = Pt(10)
+        p.font.color.rgb = DARK_GREY
+        p.line_spacing = 1.2
+        p.space_after = Pt(8)
+        p.level = 0
+
+        # Disclaimer
+        p = tf.add_paragraph()
+        p.text = "Disclaimer"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(4)
+        p.space_after = Pt(4)
+
+        disclaimer_items = [
+            "Climate Zone Analyser is an outcome of the best efforts of building simulation experts at EDS.",
+            "\u2022  EDS does not assume responsibility for outcomes from its use. By using this Application, the User indemnifies EDS against any damages.",
+            "\u2022  EDS does not guarantee uninterrupted availability. By using this Application, the User agrees to share uploaded information with EDS for analysis and research purposes.",
+            "\u2022  Open-source resources used: Clima - Berkley, Streamlit, Python",
+            "\u2022  EDS is not liable to inform Users about updates to the Application or underlying resources"
+        ]
+
+        for item in disclaimer_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        # Acknowledgement
+        p = tf.add_paragraph()
+        p.text = "Acknowledgement"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(6)
+        p.space_after = Pt(4)
+
+        ack_items = [
+            "\u2022  Betti, G., et al. CBE Clima Tool Build. Simul. (2023). https://doi.org/10.1007/s12273-023-1090-5",
+            "\u2022  Streamlit, \u00a9 Streamlit Inc., licensed under Apache 2.0",
+            "\u2022  Python \u00a9 Python Software Foundation, licensed under PSF License Version 2"
+        ]
+
+        for item in ack_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        _add_logo(slide)
+
+    _make_annexure_slide()
 
     # ── Save ──────────────────────────────────────────────────
     report_bytes = io.BytesIO()
