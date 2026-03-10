@@ -290,426 +290,1080 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int, end_hour: int, selected_parameter: str):
-    """Generate a PowerPoint report with Dry Bulb and Humidity analysis."""
+def _ppt_remove_all_slides(prs):
+    """Remove every slide from an open Presentation while preserving theme/layouts."""
+    from pptx.oxml.ns import qn
+    sldIdLst = prs.slides._sldIdLst
+    for sldId in list(sldIdLst):
+        rId = sldId.get(qn('r:id'))
+        try:
+            prs.part.drop_rel(rId)
+        except Exception:
+            pass
+        sldIdLst.remove(sldId)
 
-    # Create presentation
-    prs = Presentation()
-    prs.slide_width = Inches(10)
-    prs.slide_height = Inches(7.5)
-    
-    # Define a color scheme
-    DARK_BLUE = RGBColor(44, 90, 160)  # #2c5aa0
-    LIGHT_BLUE = RGBColor(26, 58, 82)  # #1a3a52
-    ACCENT_RED = RGBColor(211, 47, 47)  # #d32f2f
-    TEXT_COLOR = RGBColor(44, 62, 80)  # #2c3e50
-    
-    def add_title_slide(prs, title, subtitle):
-        """Add a title slide."""
-        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = DARK_BLUE
-        
-        # Add title
-        title_box = slide.shapes.add_textbox(Inches(0.5), Inches(2.5), Inches(9), Inches(1.5))
-        title_frame = title_box.text_frame
-        title_frame.text = title
-        title_frame.paragraphs[0].font.size = Pt(54)
-        title_frame.paragraphs[0].font.bold = True
-        title_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
-        
-        # Add subtitle
-        if subtitle:
-            subtitle_box = slide.shapes.add_textbox(Inches(0.5), Inches(4), Inches(9), Inches(2))
-            subtitle_frame = subtitle_box.text_frame
-            subtitle_frame.word_wrap = True
-            subtitle_frame.text = subtitle
-            subtitle_frame.paragraphs[0].font.size = Pt(24)
-            subtitle_frame.paragraphs[0].font.color.rgb = RGBColor(200, 200, 200)
-        
-        return slide
-    
-    def add_content_slide(prs, title, content_func):
-        """Add a content slide with title."""
-        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
-        
-        # Add title bar
-        title_shape = slide.shapes.add_shape(1, Inches(0), Inches(0), Inches(10), Inches(0.8))
-        title_shape.fill.solid()
-        title_shape.fill.fore_color.rgb = LIGHT_BLUE
-        title_shape.line.color.rgb = DARK_BLUE
-        
-        # Add title text
-        title_frame = title_shape.text_frame
-        title_frame.text = title
-        title_frame.paragraphs[0].font.size = Pt(32)
-        title_frame.paragraphs[0].font.bold = True
-        title_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)
-        
-        # Call content function to add content
-        content_func(slide)
-        
-        return slide
-    
+
+def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int, end_hour: int, selected_parameter: str, metadata: dict = None):
+    """Generate a PowerPoint report using the Voha template with Dry Bulb, Relative Humidity and Sun Path sections."""
+
+    # ── Resolve paths ──────────────────────────────────────────────────────────
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    except NameError:
+        base_dir = os.getcwd()
+    template_path = os.path.join(base_dir, "Voha Hospitality Climate analysis_v4 (2).pptx")
+    logo_path = os.path.join(base_dir, "EDSlogo.png")
+
+    # ── Open template and strip existing slides ────────────────────────────────
+    if os.path.exists(template_path):
+        prs = Presentation(template_path)
+        _ppt_remove_all_slides(prs)
+    else:
+        prs = Presentation()
+        prs.slide_width = Inches(13.33)
+        prs.slide_height = Inches(7.5)
+
+    BLANK_LAYOUT = prs.slide_layouts[6]
+
+    # ── Colors matching the template ──────────────────────────────────────────
+    TITLE_RED   = RGBColor(0xC0, 0x00, 0x00)   # #C00000 – template title colour
+    DARK_GREY   = RGBColor(0x40, 0x40, 0x40)
+    WHITE       = RGBColor(0xFF, 0xFF, 0xFF)
+    DIVIDER_CLR = RGBColor(0xC0, 0x00, 0x00)
+
+    # Slide canvas size (inches)
+    SW = prs.slide_width.inches   # ≈ 13.33
+    SH = prs.slide_height.inches  # ≈ 7.50
+
+    # Logo dimensions (maintain aspect ratio 550:308 ≈ 1.786)
+    LOGO_H  = 0.40  # inches
+    LOGO_W  = LOGO_H * (550 / 308)
+    LOGO_L  = 0.18
+    LOGO_T  = SH - LOGO_H - 0.12
+
+    def _add_logo(slide):
+        """Place EDSlogo.png at the bottom-left corner of the slide."""
+        if os.path.exists(logo_path):
+            slide.shapes.add_picture(
+                logo_path,
+                Inches(LOGO_L), Inches(LOGO_T),
+                width=Inches(LOGO_W), height=Inches(LOGO_H)
+            )
+
+    def _add_slide_title(slide, text, left=0.27, top=0.13, width=None, height=0.45):
+        """Add section title in the template's dark-red style."""
+        if width is None:
+            width = SW - left - 0.3
+        tb = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+        tf = tb.text_frame
+        tf.word_wrap = False
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = text
+        run.font.size = Pt(20)
+        run.font.bold = True
+        run.font.color.rgb = TITLE_RED
+
+    def _add_divider(slide, top_inches):
+        """Thin horizontal rule matching template style."""
+        line = slide.shapes.add_shape(
+            1, Inches(0.27), Inches(top_inches),
+            Inches(SW - 0.54), Inches(0.03)
+        )
+        line.fill.solid()
+        line.fill.fore_color.rgb = DIVIDER_CLR
+        line.line.fill.background()
+
+    def _save_mpl_figure(fig) -> str:
+        """Save a matplotlib figure to a temp PNG and return its path."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            fig.savefig(tmp.name, dpi=130, bbox_inches='tight', facecolor='white')
+            return tmp.name
+
+    def _err_box(slide, err):
+        tb = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(SW - 1), Inches(2))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = f"Visualization error: {err}"
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
+
     # Filter data for period
     filtered_df = df[
         (df["datetime"].dt.date >= start_date) &
         (df["datetime"].dt.date <= end_date) &
         (df["hour"].between(start_hour, end_hour))
     ]
-    
-    # === TITLE SLIDE ===
-    add_title_slide(
-        prs, 
-        "Climate Analysis Report",
-        f"Period: {start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\nHours: {start_hour:02d}:00 - {end_hour:02d}:00"
-    )
-    
-    # === ANNUAL TREND CHART SLIDE (DRY BULB) ===
-    def add_temp_chart_content(slide):
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # COVER SLIDE
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _make_cover_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+
+        # Title block background
+        bg = slide.shapes.add_shape(1, Inches(0), Inches(2.5), Inches(SW), Inches(2.5))
+        bg.fill.solid()
+        bg.fill.fore_color.rgb = TITLE_RED
+        bg.line.fill.background()
+
+        # Main title
+        tb = slide.shapes.add_textbox(Inches(0.6), Inches(2.7), Inches(SW - 1.2), Inches(1.2))
+        tf = tb.text_frame
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = "Climate Analysis Report"
+        run.font.size = Pt(40)
+        run.font.bold = True
+        run.font.color.rgb = WHITE
+
+        # Subtitle
+        tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.85), Inches(SW - 1.2), Inches(0.7))
+        tf2 = tb2.text_frame
+        p2 = tf2.paragraphs[0]
+        run2 = p2.add_run()
+        run2.text = (
+            f"Period: {start_date.strftime('%B %d')} \u2013 {end_date.strftime('%B %d, %Y')}  "
+            f"|  Hours: {start_hour:02d}:00 \u2013 {end_hour:02d}:00"
+        )
+        run2.font.size = Pt(16)
+        run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
+
+        # Bottom info line
+        tb3 = slide.shapes.add_textbox(Inches(0.6), Inches(6.5), Inches(SW - 1.2), Inches(0.4))
+        tf3 = tb3.text_frame
+        p3 = tf3.paragraphs[0]
+        run3 = p3.add_run()
+        run3.text = "Sections: Dry Bulb Temperature  |  Relative Humidity  |  Sun Path"
+        run3.font.size = Pt(11)
+        run3.font.color.rgb = DARK_GREY
+
+        _add_logo(slide)
+
+    _make_cover_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SECTION 1 – DRY BULB TEMPERATURE
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # --- 1a: Annual Trend Chart ---
+    def _make_dbt_trend_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Dry Bulb Temperature")
+        _add_divider(slide, 0.62)
+
         try:
-            # Compute daily stats
-            daily_stats = df.groupby("doy").agg({
-                "dry_bulb_temperature": ["min", "max", "mean"],
-            }).reset_index()
-            
-            daily_stats.columns = ["doy", "temp_min", "temp_max", "temp_avg"]
-            
-            # Calculate ASHRAE comfort bands
+            daily_stats = df.groupby("doy").agg(
+                temp_min=("dry_bulb_temperature", "min"),
+                temp_max=("dry_bulb_temperature", "max"),
+                temp_avg=("dry_bulb_temperature", "mean"),
+            ).reset_index()
+
             daily_avg = df.groupby("doy")["dry_bulb_temperature"].mean()
             comfort_line = daily_avg.rolling(window=7, center=True).mean()
-            comfort_80_lower = comfort_line - 3.5
-            comfort_80_upper = comfort_line + 3.5
-            comfort_90_lower = comfort_line - 2.5
-            comfort_90_upper = comfort_line + 2.5
-            
-            # Create matplotlib figure
-            fig, ax = plt.subplots(figsize=(12, 5.5), dpi=120)
-            
-            # Calculate date range for filtering
-            start_month_num = start_date.month
-            end_month_num = end_date.month
-            start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
-            if end_month_num == 12:
-                end_doy = 366
-            else:
-                end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
-            
-            # Plot ASHRAE comfort bands
-            ax.fill_between(daily_stats["doy"], comfort_80_lower, comfort_80_upper, 
-                           alpha=0.2, color='gray', label='ASHRAE 80% Comfort')
-            ax.fill_between(daily_stats["doy"], comfort_90_lower, comfort_90_upper, 
-                           alpha=0.3, color='gray', label='ASHRAE 90% Comfort')
-            
-            # Plot temperature range
+
+            start_doy = pd.to_datetime(f"2024-{start_date.month:02d}-01").dayofyear
+            end_doy = (
+                366 if end_date.month == 12
+                else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
+            )
+
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            ax.fill_between(daily_stats["doy"], comfort_line - 3.5, comfort_line + 3.5,
+                            alpha=0.18, color='gray', label='ASHRAE 80% Comfort')
+            ax.fill_between(daily_stats["doy"], comfort_line - 2.5, comfort_line + 2.5,
+                            alpha=0.28, color='gray', label='ASHRAE 90% Comfort')
             ax.fill_between(daily_stats["doy"], daily_stats["temp_min"], daily_stats["temp_max"],
-                           alpha=0.35, color='#FFB3B3', label='Daily Temp Range')
-            
-            # Plot average line
-            ax.plot(daily_stats["doy"], daily_stats["temp_avg"], 
-                   color='#d32f2f', linewidth=2.5, label='Daily Average', zorder=3)
-            
-            # Highlight selected period
-            ax.axvspan(start_doy, end_doy, alpha=0.08, color='#2c5aa0')
-            
-            ax.set_xlabel('Day of Year', fontsize=11, fontweight='bold')
+                            alpha=0.30, color='#FFB3B3', label='Daily Temp Range')
+            ax.plot(daily_stats["doy"], daily_stats["temp_avg"],
+                    color='#C00000', linewidth=2.2, label='Daily Average', zorder=3)
+            ax.axvspan(start_doy, end_doy, alpha=0.07, color='#2c5aa0', label='Selected Period')
+
+            months_doy = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            ax.set_xticks(months_doy)
+            ax.set_xticklabels(months_lbl, fontsize=10)
             ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
-            ax.set_title('Annual Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=15)
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=4, frameon=True, fontsize=10)
-            ax.grid(True, alpha=0.3, linestyle='--')
+            ax.set_title('Annual Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=5, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--')
             ax.set_facecolor('#fafafa')
             fig.patch.set_facecolor('white')
-            
             plt.tight_layout()
-            
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                fig.savefig(tmp.name, dpi=120, bbox_inches='tight', facecolor='white')
-                tmp_path = tmp.name
-            
+
+            tmp = _save_mpl_figure(fig)
             plt.close(fig)
-            
-            # Add image to slide
-            slide.shapes.add_picture(tmp_path, Inches(0.3), Inches(1.0), width=Inches(9.4), height=Inches(5.8))
-            
-            # Clean up
-            os.unlink(tmp_path)
-            
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.8))
+            os.unlink(tmp)
         except Exception as e:
-            text_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.5), Inches(8.4), Inches(5))
-            text_frame = text_box.text_frame
-            text_frame.word_wrap = True
-            text_frame.text = f"Chart visualization error: {str(e)}"
-            text_frame.paragraphs[0].font.size = Pt(12)
-            text_frame.paragraphs[0].font.color.rgb = TEXT_COLOR
-    
-    add_content_slide(prs, "Annual Trend - Dry Bulb Temperature", add_temp_chart_content)
-    
-    # === ANNUAL TREND CHART SLIDE (HUMIDITY) ===
-    def add_humidity_chart_content(slide):
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_dbt_trend_slide()
+
+    # --- 1b: Monthly Averages Bar Chart ---
+    def _make_dbt_monthly_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Dry Bulb Temperature – Monthly Summary")
+        _add_divider(slide, 0.62)
+
         try:
-            # Compute daily stats for humidity
-            daily_stats = df.groupby("doy").agg({
-                "relative_humidity": ["min", "max", "mean"],
-            }).reset_index()
-            
-            daily_stats.columns = ["doy", "rh_min", "rh_max", "rh_avg"]
-            
-            # Create matplotlib figure
-            fig, ax = plt.subplots(figsize=(12, 5.5), dpi=120)
-            
-            # Calculate date range for filtering
-            start_month_num = start_date.month
-            end_month_num = end_date.month
-            start_doy = pd.to_datetime(f"2024-{start_month_num}-01").dayofyear
-            if end_month_num == 12:
-                end_doy = 366
-            else:
-                end_doy = pd.to_datetime(f"2024-{end_month_num+1}-01").dayofyear - 1
-            
-            # Plot risk zones
-            ax.axhspan(75, 100, alpha=0.15, color='#FF6B6B', label='Condensation Risk (>75%)')
-            ax.axhspan(60, 75, alpha=0.15, color='#FFA500', label='High RH (60-75%)')
-            ax.axhspan(30, 60, alpha=0.15, color='#4ECDC4', label='Comfortable (30-60%)')
-            ax.axhspan(0, 30, alpha=0.15, color='#FFD93D', label='Low RH (<30%)')
-            
-            # Plot humidity range
-            ax.fill_between(daily_stats["doy"], daily_stats["rh_min"], daily_stats["rh_max"],
-                           alpha=0.35, color='#0099ff', label='Daily RH Range')
-            
-            # Plot average line
-            ax.plot(daily_stats["doy"], daily_stats["rh_avg"], 
-                   color='#0066cc', linewidth=2.5, label='Daily Average RH', zorder=3)
-            
-            # Highlight selected period
-            ax.axvspan(start_doy, end_doy, alpha=0.08, color='#2c5aa0')
-            
-            ax.set_xlabel('Day of Year', fontsize=11, fontweight='bold')
-            ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
-            ax.set_title('Annual Relative Humidity Trend', fontsize=13, fontweight='bold', pad=15)
-            ax.set_ylim(0, 100)
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=4, frameon=True, fontsize=10)
-            ax.grid(True, alpha=0.3, linestyle='--')
+            monthly = df.groupby("month").agg(
+                t_min=("dry_bulb_temperature", "min"),
+                t_max=("dry_bulb_temperature", "max"),
+                t_avg=("dry_bulb_temperature", "mean"),
+            ).reset_index()
+
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            x = np.arange(12)
+
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            bar_w = 0.30
+            ax.bar(x - bar_w, monthly["t_min"], bar_w, color='#90CAF9', label='Min Temp')
+            ax.bar(x,          monthly["t_avg"], bar_w, color='#C00000', label='Avg Temp', alpha=0.85)
+            ax.bar(x + bar_w,  monthly["t_max"], bar_w, color='#EF9A9A', label='Max Temp')
+
+            # Comfort band zone
+            ax.axhspan(20, 26, alpha=0.10, color='green', label='Comfort Band (20–26°C)')
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(months_lbl, fontsize=10)
+            ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
+            ax.set_title('Monthly Temperature Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--', axis='y')
             ax.set_facecolor('#fafafa')
             fig.patch.set_facecolor('white')
-            
+
+            # Annotate period months
+            for m in range(start_date.month, end_date.month + 1):
+                ax.axvspan(m - 1 - 0.5, m - 1 + 0.5, alpha=0.06, color='navy')
+
             plt.tight_layout()
-            
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                fig.savefig(tmp.name, dpi=120, bbox_inches='tight', facecolor='white')
-                tmp_path = tmp.name
-            
+            tmp = _save_mpl_figure(fig)
             plt.close(fig)
-            
-            # Add image to slide
-            slide.shapes.add_picture(tmp_path, Inches(0.3), Inches(1.0), width=Inches(9.4), height=Inches(5.8))
-            
-            # Clean up
-            os.unlink(tmp_path)
-            
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.5))
+            os.unlink(tmp)
+
+            # Key stats text box (bottom right)
+            if not filtered_df.empty:
+                stats_txt = (
+                    f"Selected Period   Min: {filtered_df['dry_bulb_temperature'].min():.1f}°C  "
+                    f"Avg: {filtered_df['dry_bulb_temperature'].mean():.1f}°C  "
+                    f"Max: {filtered_df['dry_bulb_temperature'].max():.1f}°C  "
+                    f" |  Ann. CDD24: {(df['dry_bulb_temperature'] - 24).clip(lower=0).sum():.0f}   "
+                    f"HDD18: {(18 - df['dry_bulb_temperature']).clip(lower=0).sum():.0f}"
+                )
+                tb = slide.shapes.add_textbox(Inches(0.27), Inches(6.35), Inches(SW - 0.54), Inches(0.35))
+                tf = tb.text_frame
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = stats_txt
+                run.font.size = Pt(9)
+                run.font.color.rgb = DARK_GREY
+
         except Exception as e:
-            text_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.5), Inches(8.4), Inches(5))
-            text_frame = text_box.text_frame
-            text_frame.word_wrap = True
-            text_frame.text = f"Chart visualization error: {str(e)}"
-            text_frame.paragraphs[0].font.size = Pt(12)
-            text_frame.paragraphs[0].font.color.rgb = TEXT_COLOR
-    
-    add_content_slide(prs, "Annual Trend - Relative Humidity", add_humidity_chart_content)
-    
-    # === DRY BULB TEMPERATURE ANALYSIS ===
-    def add_temp_content(slide):
-        if not filtered_df.empty:
-            min_temp = filtered_df["dry_bulb_temperature"].min()
-            max_temp = filtered_df["dry_bulb_temperature"].max()
-            avg_temp = filtered_df["dry_bulb_temperature"].mean()
-            
-            # Calculate HDD18 and CDD24 for full year
-            hdd18 = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum()
-            cdd24 = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
-            
-            hdd18_filtered = (18 - filtered_df["dry_bulb_temperature"]).clip(lower=0).sum()
-            cdd24_filtered = (filtered_df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
-            
-            # Create metrics with better layout - 2 rows of 4 cards
-            metrics = [
-                ("Min Temp", f"{min_temp:.1f}°C", "#FF9800", RGBColor(255, 152, 0)),
-                ("Max Temp", f"{max_temp:.1f}°C", "#F44336", RGBColor(244, 67, 54)),
-                ("Avg Temp", f"{avg_temp:.1f}°C", "#2196F3", RGBColor(33, 150, 243)),
-                ("Diurnal Range", f"{max_temp - min_temp:.1f}°C", "#9C27B0", RGBColor(156, 39, 176)),
-                ("HDD18 (Annual)", f"{hdd18:.0f}", "#1976D2", RGBColor(25, 118, 210)),
-                ("CDD24 (Annual)", f"{cdd24:.0f}", "#D32F2F", RGBColor(211, 47, 47)),
-                ("HDD18 (Period)", f"{hdd18_filtered:.0f}", "#0097A7", RGBColor(0, 150, 167)),
-                ("CDD24 (Period)", f"{cdd24_filtered:.0f}", "#C62828", RGBColor(198, 40, 40)),
-            ]
-            
-            for idx, (label, value, hex_color, rgb_color) in enumerate(metrics):
-                col = idx % 4
-                row = idx // 4
-                
-                left = Inches(0.4 + col * 2.35)
-                top = Inches(1.1 + row * 1.6)
-                box_width = Inches(2.15)
-                box_height = Inches(1.4)
-                
-                # Add rounded rectangle box with gradient-like effect using border
-                box = slide.shapes.add_shape(1, left, top, box_width, box_height)
-                box.fill.solid()
-                box.fill.fore_color.rgb = RGBColor(255, 255, 255)  # White background
-                box.line.color.rgb = rgb_color
-                box.line.width = Pt(3)
-                
-                # Add colored top border for visual appeal
-                top_bar = slide.shapes.add_shape(1, left, top, box_width, Inches(0.25))
-                top_bar.fill.solid()
-                top_bar.fill.fore_color.rgb = rgb_color
-                top_bar.line.color.rgb = rgb_color
-                
-                # Add label
-                label_frame = box.text_frame
-                label_frame.clear()
-                label_frame.word_wrap = True
-                label_frame.margin_top = Inches(0.08)
-                label_frame.margin_left = Inches(0.1)
-                label_frame.margin_right = Inches(0.1)
-                
-                # Label
-                p = label_frame.paragraphs[0]
-                p.text = label
-                p.font.size = Pt(9)
-                p.font.bold = True
-                p.font.color.rgb = rgb_color
-                
-                # Value
-                p2 = label_frame.add_paragraph()
-                p2.text = value
-                p2.font.size = Pt(16)
-                p2.font.bold = True
-                p2.font.color.rgb = TEXT_COLOR
-                p2.space_before = Pt(4)
-    
-    add_content_slide(prs, "Dry Bulb Temperature Analysis", add_temp_content)
-    
-    # === HUMIDITY ANALYSIS ===
-    def add_humidity_content(slide):
-        if not filtered_df.empty:
-            # Full year metrics
-            high_humidity_annual = len(df[df["relative_humidity"] > 60])
-            condensation_risk_annual = len(df[df["relative_humidity"] > 75])
-            low_humidity_annual = len(df[df["relative_humidity"] < 30])
-            avg_rh_annual = df["relative_humidity"].mean()
-            
-            # Period metrics
-            min_rh = filtered_df["relative_humidity"].min()
-            max_rh = filtered_df["relative_humidity"].max()
-            avg_rh = filtered_df["relative_humidity"].mean()
-            high_humidity_filtered = len(filtered_df[filtered_df["relative_humidity"] > 60])
-            condensation_risk_filtered = len(filtered_df[filtered_df["relative_humidity"] > 75])
-            
-            # Create metrics with better layout
-            metrics = [
-                ("Min RH", f"{min_rh:.0f}%", "#4CAF50", RGBColor(76, 175, 80)),
-                ("Max RH", f"{max_rh:.0f}%", "#FF5722", RGBColor(255, 87, 34)),
-                ("Avg RH", f"{avg_rh:.0f}%", "#00BCD4", RGBColor(0, 188, 212)),
-                ("Low RH (<30%)", f"{low_humidity_annual:.0f} hrs", "#FFB74D", RGBColor(255, 183, 77)),
-                ("High RH (>60%)", f"{high_humidity_annual:.0f} hrs", "#EF5350", RGBColor(239, 83, 80)),
-                ("Condensation (>75%)", f"{condensation_risk_annual:.0f} hrs", "#E53935", RGBColor(229, 57, 53)),
-                ("High RH (Period)", f"{high_humidity_filtered:.0f} hrs", "#AB47BC", RGBColor(171, 71, 188)),
-                ("Condensation (Period)", f"{condensation_risk_filtered:.0f} hrs", "#8E24AA", RGBColor(142, 36, 170)),
-            ]
-            
-            for idx, (label, value, hex_color, rgb_color) in enumerate(metrics):
-                col = idx % 4
-                row = idx // 4
-                
-                left = Inches(0.4 + col * 2.35)
-                top = Inches(1.1 + row * 1.6)
-                box_width = Inches(2.15)
-                box_height = Inches(1.4)
-                
-                # Add rounded rectangle box
-                box = slide.shapes.add_shape(1, left, top, box_width, box_height)
-                box.fill.solid()
-                box.fill.fore_color.rgb = RGBColor(255, 255, 255)  # White background
-                box.line.color.rgb = rgb_color
-                box.line.width = Pt(3)
-                
-                # Add colored top border
-                top_bar = slide.shapes.add_shape(1, left, top, box_width, Inches(0.25))
-                top_bar.fill.solid()
-                top_bar.fill.fore_color.rgb = rgb_color
-                top_bar.line.color.rgb = rgb_color
-                
-                # Add label
-                label_frame = box.text_frame
-                label_frame.clear()
-                label_frame.word_wrap = True
-                label_frame.margin_top = Inches(0.08)
-                label_frame.margin_left = Inches(0.1)
-                label_frame.margin_right = Inches(0.1)
-                
-                # Label
-                p = label_frame.paragraphs[0]
-                p.text = label
-                p.font.size = Pt(9)
-                p.font.bold = True
-                p.font.color.rgb = rgb_color
-                
-                # Value
-                p2 = label_frame.add_paragraph()
-                p2.text = value
-                p2.font.size = Pt(16)
-                p2.font.bold = True
-                p2.font.color.rgb = TEXT_COLOR
-                p2.space_before = Pt(4)
-    
-    add_content_slide(prs, "Humidity Analysis", add_humidity_content)
-    
-    # === SUMMARY SLIDE ===
-    def add_summary_content(slide):
-        summary_text = f"""
-Period Analyzed: {start_date.strftime('%B %d')} - {end_date.strftime('%B %d')}
-Operating Hours: {start_hour:02d}:00 - {end_hour:02d}:00
+            _err_box(slide, e)
 
-Dry Bulb Temperature:
-• Range: {filtered_df['dry_bulb_temperature'].min():.2f}°C to {filtered_df['dry_bulb_temperature'].max():.2f}°C
-• Average: {filtered_df['dry_bulb_temperature'].mean():.2f}°C
-• Hours above 28°C: {len(filtered_df[filtered_df['dry_bulb_temperature'] > 28])}
-• Hours below 12°C: {len(filtered_df[filtered_df['dry_bulb_temperature'] < 12])}
+        _add_logo(slide)
 
-Relative Humidity:
-• Range: {filtered_df['relative_humidity'].min():.1f}% to {filtered_df['relative_humidity'].max():.1f}%
-• Average: {filtered_df['relative_humidity'].mean():.1f}%
-• Hours with High RH (>60%): {len(filtered_df[filtered_df['relative_humidity'] > 60])}
-• Hours with Condensation Risk (>75%): {len(filtered_df[filtered_df['relative_humidity'] > 75])}
-        """
-        
-        text_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.2), Inches(8.4), Inches(5.8))
-        text_frame = text_box.text_frame
-        text_frame.word_wrap = True
-        text_frame.text = summary_text
-        
-        for paragraph in text_frame.paragraphs:
-            paragraph.font.size = Pt(12)
-            paragraph.font.color.rgb = TEXT_COLOR
-            if paragraph.text.startswith("•"):
-                paragraph.level = 1
-                paragraph.font.size = Pt(11)
-            elif ":" in paragraph.text and not paragraph.text.startswith("•"):
-                paragraph.font.bold = True
-                paragraph.font.size = Pt(13)
-    
-    add_content_slide(prs, "Summary", add_summary_content)
-    
-    # Save to bytes
+    _make_dbt_monthly_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SECTION 2 – RELATIVE HUMIDITY
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # --- 2a: Annual Trend Chart ---
+    def _make_rh_trend_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Relative Humidity")
+        _add_divider(slide, 0.62)
+
+        try:
+            daily_stats = df.groupby("doy").agg(
+                rh_min=("relative_humidity", "min"),
+                rh_max=("relative_humidity", "max"),
+                rh_avg=("relative_humidity", "mean"),
+            ).reset_index()
+
+            start_doy = pd.to_datetime(f"2024-{start_date.month:02d}-01").dayofyear
+            end_doy = (
+                366 if end_date.month == 12
+                else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
+            )
+
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            ax.axhspan(75, 100, alpha=0.13, color='#FF6B6B', label='Condensation Risk (>75%)')
+            ax.axhspan(60,  75, alpha=0.13, color='#FFA500', label='High RH (60–75%)')
+            ax.axhspan(30,  60, alpha=0.13, color='#4ECDC4', label='Comfortable (30–60%)')
+            ax.axhspan( 0,  30, alpha=0.13, color='#FFD93D', label='Low RH (<30%)')
+
+            ax.fill_between(daily_stats["doy"], daily_stats["rh_min"], daily_stats["rh_max"],
+                            alpha=0.28, color='#0099ff', label='Daily RH Range')
+            ax.plot(daily_stats["doy"], daily_stats["rh_avg"],
+                    color='#0066cc', linewidth=2.2, label='Daily Average RH', zorder=3)
+            ax.axvspan(start_doy, end_doy, alpha=0.07, color='#2c5aa0', label='Selected Period')
+
+            months_doy = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            ax.set_xticks(months_doy)
+            ax.set_xticklabels(months_lbl, fontsize=10)
+            ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
+            ax.set_ylim(0, 100)
+            ax.set_title('Annual Relative Humidity Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=4, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--')
+            ax.set_facecolor('#fafafa')
+            fig.patch.set_facecolor('white')
+            plt.tight_layout()
+
+            tmp = _save_mpl_figure(fig)
+            plt.close(fig)
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.8))
+            os.unlink(tmp)
+        except Exception as e:
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_rh_trend_slide()
+
+    # --- 2b: Monthly RH Bar Chart ---
+    def _make_rh_monthly_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Relative Humidity – Monthly Summary")
+        _add_divider(slide, 0.62)
+
+        try:
+            monthly_rh = df.groupby("month").agg(
+                rh_min=("relative_humidity", "min"),
+                rh_max=("relative_humidity", "max"),
+                rh_avg=("relative_humidity", "mean"),
+            ).reset_index()
+
+            months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            x = np.arange(12)
+
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            bar_w = 0.30
+            ax.bar(x - bar_w, monthly_rh["rh_min"], bar_w, color='#AED6F1', label='Min RH')
+            ax.bar(x,          monthly_rh["rh_avg"], bar_w, color='#0066cc', label='Avg RH', alpha=0.85)
+            ax.bar(x + bar_w,  monthly_rh["rh_max"], bar_w, color='#5DADE2', label='Max RH')
+
+            ax.axhspan(30, 60, alpha=0.10, color='green', label='Comfortable (30–60%)')
+            ax.axhline(75, color='#E74C3C', linewidth=1.2, linestyle='--', label='Condensation Threshold (75%)')
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(months_lbl, fontsize=10)
+            ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
+            ax.set_ylim(0, 110)
+            ax.set_title('Monthly Relative Humidity Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
+            ax.grid(True, alpha=0.25, linestyle='--', axis='y')
+            ax.set_facecolor('#fafafa')
+            fig.patch.set_facecolor('white')
+
+            for m in range(start_date.month, end_date.month + 1):
+                ax.axvspan(m - 1 - 0.5, m - 1 + 0.5, alpha=0.06, color='navy')
+
+            plt.tight_layout()
+            tmp = _save_mpl_figure(fig)
+            plt.close(fig)
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72), width=Inches(SW - 0.54), height=Inches(5.5))
+            os.unlink(tmp)
+
+            if not filtered_df.empty:
+                stats_txt = (
+                    f"Selected Period   Min RH: {filtered_df['relative_humidity'].min():.0f}%  "
+                    f"Avg RH: {filtered_df['relative_humidity'].mean():.0f}%  "
+                    f"Max RH: {filtered_df['relative_humidity'].max():.0f}%  "
+                    f" |  High RH hrs (>60%): {len(filtered_df[filtered_df['relative_humidity'] > 60])}  "
+                    f"Condensation risk hrs (>75%): {len(filtered_df[filtered_df['relative_humidity'] > 75])}"
+                )
+                tb = slide.shapes.add_textbox(Inches(0.27), Inches(6.35), Inches(SW - 0.54), Inches(0.35))
+                tf = tb.text_frame
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = stats_txt
+                run.font.size = Pt(9)
+                run.font.color.rgb = DARK_GREY
+
+        except Exception as e:
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_rh_monthly_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SECTION 3 – SUN PATH
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _make_sun_path_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Sun Path Diagram")
+        _add_divider(slide, 0.62)
+
+        _meta = metadata or {}
+        lat = _meta.get("latitude")
+        lon = _meta.get("longitude")
+        tz_str = _meta.get("timezone", "UTC")
+
+        if lat is None or lon is None:
+            _err_box(slide, "Latitude/Longitude not available from EPW metadata.")
+            _add_logo(slide)
+            return
+
+        try:
+            from pvlib import solarposition as _solpos_lib
+            import pytz as _pytz
+
+            try:
+                _tz = _pytz.timezone(tz_str)
+            except Exception:
+                _tz = _pytz.UTC
+
+            times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left")
+            sol = _solpos_lib.get_solarposition(times, lat, lon)
+            sol = sol[sol["apparent_elevation"] > 0].copy()
+            sol["r"] = 90 - sol["apparent_elevation"]
+
+            # Build a matplotlib polar sun path chart (clean, static, print-ready)
+            fig = plt.figure(figsize=(8.5, 7.2), dpi=130, facecolor='white')
+            ax = fig.add_subplot(111, projection='polar')
+            ax.set_theta_zero_location('N')
+            ax.set_theta_direction(-1)   # clockwise = compass convention
+            ax.set_ylim(0, 90)
+            ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
+            ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
+                               fontsize=7, color='#555')
+            ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
+            ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=10, fontweight='bold')
+            ax.set_facecolor('#F0F4F8')
+            ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
+
+            # Scatter all-year sun positions coloured by day-of-year
+            sc = ax.scatter(
+                np.radians(sol["azimuth"].values),
+                sol["r"].values,
+                c=sol.index.dayofyear,
+                cmap='YlOrRd',
+                s=1.0,
+                alpha=0.55,
+                vmin=1, vmax=365,
+                linewidths=0,
+                zorder=2,
+            )
+            cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.75)
+            cbar.set_label('Day of Year', fontsize=9)
+            cbar.set_ticks([1, 91, 182, 273, 365])
+            cbar.set_ticklabels(['1\n(Jan)', '91\n(Apr)', '182\n(Jul)', '273\n(Oct)', '365\n(Dec)'])
+
+            # Key date arcs
+            key_dates = [
+                ("Mar 21 (Spring Equinox)", "2020-03-21", "#FF9500", 1.6),
+                ("Jun 21 (Summer Solstice)", "2020-06-21", "#CC0000", 2.0),
+                ("Dec 21 (Winter Solstice)", "2020-12-21", "#0066CC", 2.0),
+            ]
+            for lbl, dstr, col, lw in key_dates:
+                dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
+                ks = _solpos_lib.get_solarposition(dt, lat, lon)
+                ks = ks[ks["apparent_elevation"] > 0]
+                if not ks.empty:
+                    ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
+                            color=col, linewidth=lw, label=lbl, zorder=4)
+
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.06), ncol=3,
+                      frameon=True, fontsize=8, borderaxespad=0)
+            ax.set_title(f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
+                         fontsize=11, fontweight='bold', color='#333', pad=14)
+
+            plt.tight_layout()
+            tmp = _save_mpl_figure(fig)
+            plt.close(fig)
+
+            # Centre the sun path diagram on the slide
+            img_w = SW * 0.62
+            img_h = SH * 0.83
+            img_l = (SW - img_w) / 2
+            img_t = 0.72
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_w), height=Inches(img_h))
+            os.unlink(tmp)
+
+            # Annotation panel on the right
+            ann_l = img_l + img_w + 0.2
+            ann_w = SW - ann_l - 0.27
+
+            def _ann(slide, text, top, size=9, bold=False, color=None):
+                tb = slide.shapes.add_textbox(Inches(ann_l), Inches(top), Inches(ann_w), Inches(0.38))
+                tf = tb.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = text
+                run.font.size = Pt(size)
+                run.font.bold = bold
+                run.font.color.rgb = color or DARK_GREY
+
+            _ann(slide, "Location", 0.75, size=8, bold=True, color=TITLE_RED)
+            _ann(slide, f"Latitude:   {lat:.3f}\u00b0", 1.05, size=8)
+            _ann(slide, f"Longitude: {lon:.3f}\u00b0", 1.36, size=8)
+
+            _ann(slide, "Key Dates", 1.80, size=8, bold=True, color=TITLE_RED)
+            _ann(slide, "\u25a0  Mar 21 – Spring Equinox", 2.10, size=8)
+            _ann(slide, "\u25a0  Jun 21 – Summer Solstice", 2.40, size=8)
+            _ann(slide, "\u25a0  Dec 21 – Winter Solstice", 2.70, size=8)
+
+            # Summer / Winter altitude stats
+            summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz)
+            ssum = _solpos_lib.get_solarposition(summer_dt, lat, lon)
+            noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
+
+            winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz)
+            swin = _solpos_lib.get_solarposition(winter_dt, lat, lon)
+            noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
+
+            _ann(slide, "Noon Altitudes", 3.15, size=8, bold=True, color=TITLE_RED)
+            _ann(slide, f"Summer Solstice: {noon_alt_sum:.1f}\u00b0", 3.45, size=8)
+            _ann(slide, f"Winter Solstice: {noon_alt_win:.1f}\u00b0", 3.75, size=8)
+
+        except Exception as e:
+            _err_box(slide, e)
+
+        _add_logo(slide)
+
+    _make_sun_path_slide()
+
+    # ── Save ───────────────────────────────────────────────────────────────────
     report_bytes = io.BytesIO()
     prs.save(report_bytes)
     report_bytes.seek(0)
-    
     return report_bytes
+
+def generate_shading_pptx_report(
+    df: pd.DataFrame,
+    metadata: dict,
+    temp_threshold: float = 28.0,
+    rad_threshold: float = 315.0,
+    lat: float = None,
+    lon: float = None,
+    tz_str: str = "UTC",
+    design_cutoff_angle: float = 45.0,
+):
+    """Generate a Shading Analysis PowerPoint report using the Voha template."""
+
+    # ── Resolve paths ─────────────────────────────────────────────
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    except NameError:
+        base_dir = os.getcwd()
+    template_path = os.path.join(base_dir, "Voha Hospitality Climate analysis_v4 (2).pptx")
+    logo_path = os.path.join(base_dir, "EDSlogo.png")
+
+    if os.path.exists(template_path):
+        prs = Presentation(template_path)
+        _ppt_remove_all_slides(prs)
+    else:
+        prs = Presentation()
+        prs.slide_width = Inches(13.33)
+        prs.slide_height = Inches(7.5)
+
+    BLANK_LAYOUT = prs.slide_layouts[6]
+    TITLE_RED  = RGBColor(0xC0, 0x00, 0x00)
+    DARK_GREY  = RGBColor(0x40, 0x40, 0x40)
+    WHITE      = RGBColor(0xFF, 0xFF, 0xFF)
+
+    SW = prs.slide_width.inches
+    SH = prs.slide_height.inches
+    LOGO_H = 0.40
+    LOGO_W = LOGO_H * (550 / 308)
+    LOGO_L = 0.18
+    LOGO_T = SH - LOGO_H - 0.12
+
+    def _add_logo(slide):
+        if os.path.exists(logo_path):
+            slide.shapes.add_picture(logo_path, Inches(LOGO_L), Inches(LOGO_T),
+                                     width=Inches(LOGO_W), height=Inches(LOGO_H))
+
+    def _slide_title(slide, text, top=0.13):
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(top), Inches(SW - 0.54), Inches(0.45))
+        tf = tb.text_frame
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = text
+        run.font.size = Pt(20)
+        run.font.bold = True
+        run.font.color.rgb = TITLE_RED
+
+    def _divider(slide, top_inches):
+        bar = slide.shapes.add_shape(1, Inches(0.27), Inches(top_inches),
+                                     Inches(SW - 0.54), Inches(0.03))
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = TITLE_RED
+        bar.line.fill.background()
+
+    def _err(slide, err):
+        tb = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(SW - 1), Inches(2))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = f"Error: {err}"
+        run.font.size = Pt(10)
+        run.font.color.rgb = TITLE_RED
+
+    def _save_fig(fig) -> str:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            fig.savefig(tmp.name, dpi=130, bbox_inches="tight", facecolor="white")
+            return tmp.name
+
+    _lat  = lat  if lat  is not None else (metadata.get("latitude")  or 0.0)
+    _lon  = lon  if lon  is not None else (metadata.get("longitude") or 0.0)
+    _tz   = tz_str or metadata.get("timezone", "UTC")
+
+    # ═══════════════════════════════════════════════════════════
+    # SLIDE 1 – COVER
+    # ═══════════════════════════════════════════════════════════
+    def _cover():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        bg = slide.shapes.add_shape(1, Inches(0), Inches(2.4), Inches(SW), Inches(2.6))
+        bg.fill.solid()
+        bg.fill.fore_color.rgb = TITLE_RED
+        bg.line.fill.background()
+
+        tb = slide.shapes.add_textbox(Inches(0.6), Inches(2.55), Inches(SW - 1.2), Inches(1.2))
+        p = tb.text_frame.paragraphs[0]
+        run = p.add_run()
+        run.text = "Shading Analysis Report"
+        run.font.size = Pt(40)
+        run.font.bold = True
+        run.font.color.rgb = WHITE
+
+        tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.75), Inches(SW - 1.2), Inches(0.65))
+        p2 = tb2.text_frame.paragraphs[0]
+        run2 = p2.add_run()
+        run2.text = (
+            f"Location: {_lat:.3f}\u00b0 N, {_lon:.3f}\u00b0 E   |  "
+            f"Temp threshold: {temp_threshold}\u00b0C   |  "
+            f"Radiation threshold: {rad_threshold} W/m\u00b2   |  "
+            f"Design cutoff angle: {design_cutoff_angle}\u00b0"
+        )
+        run2.font.size = Pt(13)
+        run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
+
+        tb3 = slide.shapes.add_textbox(Inches(0.6), Inches(6.5), Inches(SW - 1.2), Inches(0.4))
+        p3 = tb3.text_frame.paragraphs[0]
+        run3 = p3.add_run()
+        run3.text = "Sections: Thermal & Radiation Matrix  |  Sun Path (Shading Mode)  |  Orientation Analysis  |  Shading Masks"
+        run3.font.size = Pt(10)
+        run3.font.color.rgb = DARK_GREY
+
+        _add_logo(slide)
+
+    _cover()
+
+    # ═══════════════════════════════════════════════════════════
+    # SLIDE 2 – THERMAL & RADIATION MATRIX
+    # ═══════════════════════════════════════════════════════════
+    def _thermal_matrix_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Thermal & Radiation Matrix")
+        _divider(slide, 0.62)
+
+        try:
+            temp_matrix, rad_matrix, overheat_mask = build_thermal_matrix(df, temp_threshold, rad_threshold)
+            months_lbl = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+            hours_lbl  = [f"{h:02d}:00" for h in range(24)]
+
+            fig, axes = plt.subplots(1, 2, figsize=(13.5, 6.2), dpi=120)
+
+            for ax, matrix, title, cmap, clabel in [
+                (axes[0], temp_matrix,  f"Mean Dry-Bulb Temp (\u00b0C)  [threshold: {temp_threshold}\u00b0C]", "RdYlBu_r", "\u00b0C"),
+                (axes[1], rad_matrix,   f"Mean GHI (W/m\u00b2)  [threshold: {rad_threshold} W/m\u00b2]",  "YlOrRd",    "W/m\u00b2"),
+            ]:
+                im = ax.imshow(matrix.values, aspect="auto", origin="upper", cmap=cmap)
+                plt.colorbar(im, ax=ax, fraction=0.035, pad=0.03, label=clabel)
+                ax.set_xticks(range(12))
+                ax.set_xticklabels(months_lbl, fontsize=8)
+                ax.set_yticks(range(24))
+                ax.set_yticklabels(hours_lbl, fontsize=7)
+                ax.set_title(title, fontsize=10, fontweight="bold", pad=8)
+                ax.set_xlabel("Month", fontsize=9)
+                ax.set_ylabel("Hour of Day", fontsize=9)
+
+                # Outline overheating cells
+                for h_i in range(24):
+                    for m_i in range(12):
+                        if overheat_mask.iloc[h_i, m_i]:
+                            rect = plt.Rectangle(
+                                (m_i - 0.5, h_i - 0.5), 1, 1,
+                                fill=False, edgecolor="black", linewidth=1.6
+                            )
+                            ax.add_patch(rect)
+
+            fig.suptitle(
+                "Overheating Hours  (black border = both thresholds exceeded)",
+                fontsize=11, fontweight="bold", y=1.01, color="#333"
+            )
+            fig.patch.set_facecolor("white")
+            plt.tight_layout()
+
+            tmp = _save_fig(fig)
+            plt.close(fig)
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                     width=Inches(SW - 0.54), height=Inches(5.9))
+            os.unlink(tmp)
+        except Exception as e:
+            _err(slide, e)
+
+        _add_logo(slide)
+
+    _thermal_matrix_slide()
+
+    # ═══════════════════════════════════════════════════════════
+    # SLIDE 3 – SUN PATH (SHADING MODE)
+    # ═══════════════════════════════════════════════════════════
+    def _sun_path_shading_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Sun Path – Shading Analysis")
+        _divider(slide, 0.62)
+
+        try:
+            import pytz as _pytz
+            from pvlib import solarposition as _sp
+
+            try:
+                tz = _pytz.timezone(_tz)
+            except Exception:
+                tz = _pytz.UTC
+
+            times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=tz, inclusive="left")
+            sol = _sp.get_solarposition(times, _lat, _lon)
+            sol = sol[sol["apparent_elevation"] > 0].copy()
+
+            # Merge EPW data
+            epw = df.set_index("datetime").copy()
+            if epw.index.tz is None:
+                epw.index = epw.index.tz_localize(tz)
+            else:
+                epw.index = epw.index.tz_convert(tz)
+            epw.index = epw.index.map(lambda x: x.replace(year=2020))
+
+            sol = sol.join(epw[["dry_bulb_temperature","global_horizontal_irradiance"]], how="left")
+            sol["global_horizontal_irradiance"] = sol["global_horizontal_irradiance"].fillna(0)
+            sol["dry_bulb_temperature"] = sol["dry_bulb_temperature"].fillna(
+                sol["dry_bulb_temperature"].median()
+            )
+            shading_needed = (
+                (sol["dry_bulb_temperature"] > temp_threshold) &
+                (sol["global_horizontal_irradiance"] > rad_threshold)
+            )
+
+            fig = plt.figure(figsize=(9, 7.2), dpi=130, facecolor="white")
+            ax = fig.add_subplot(111, projection="polar")
+            ax.set_theta_zero_location("N")
+            ax.set_theta_direction(-1)
+            ax.set_ylim(0, 90)
+            ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
+            ax.set_yticklabels(["90\u00b0","75\u00b0","60\u00b0","45\u00b0","30\u00b0","15\u00b0","0\u00b0"],
+                               fontsize=7, color="#555")
+            ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
+            ax.set_xticklabels(["N","NE","E","SE","S","SW","W","NW"], fontsize=10, fontweight="bold")
+            ax.set_facecolor("#F0F4F8")
+            ax.grid(True, alpha=0.35, linestyle="--", linewidth=0.6)
+
+            r = 90 - sol["apparent_elevation"].values
+            theta = np.radians(sol["azimuth"].values)
+
+            # Background – no-shading hours
+            mask_ok = ~shading_needed.values
+            ax.scatter(theta[mask_ok], r[mask_ok], c="#FFF9C4", s=1.2,
+                       alpha=0.45, linewidths=0, label="No shading needed", zorder=2)
+
+            # Foreground – shading required hours
+            mask_sh = shading_needed.values
+            ax.scatter(theta[mask_sh], r[mask_sh], c="#E65100", s=2.5,
+                       alpha=0.75, linewidths=0, label="Shading required", zorder=3)
+
+            # Key date arcs
+            for lbl, dstr, col, lw in [
+                ("Mar 21", "2020-03-21", "#FF9500", 1.4),
+                ("Jun 21", "2020-06-21", "#CC0000", 1.8),
+                ("Dec 21", "2020-12-21", "#0066CC", 1.8),
+            ]:
+                dt = pd.date_range(dstr, periods=288, freq="5min", tz=tz)
+                ks = _sp.get_solarposition(dt, _lat, _lon)
+                ks = ks[ks["apparent_elevation"] > 0]
+                if not ks.empty:
+                    ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
+                            color=col, linewidth=lw, label=lbl, zorder=4)
+
+            shading_pct = mask_sh.sum() / len(mask_sh) * 100 if len(mask_sh) else 0
+            ax.set_title(
+                f"Sun Path – Shading Mode   ({shading_pct:.1f}% of daytime hours require shading)",
+                fontsize=10, fontweight="bold", color="#333", pad=14
+            )
+            ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.06), ncol=3,
+                      frameon=True, fontsize=8)
+
+            plt.tight_layout()
+            tmp = _save_fig(fig)
+            plt.close(fig)
+
+            iw = SW * 0.58
+            ih = SH * 0.84
+            il = (SW - iw) / 2
+            slide.shapes.add_picture(tmp, Inches(il), Inches(0.72),
+                                     width=Inches(iw), height=Inches(ih))
+            os.unlink(tmp)
+
+            # Stats panel – right side
+            pl = il + iw + 0.18
+            pw = SW - pl - 0.27
+
+            def _ann(text, top, size=9, bold=False, color=None):
+                tb = slide.shapes.add_textbox(Inches(pl), Inches(top), Inches(pw), Inches(0.38))
+                tf = tb.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = text
+                run.font.size = Pt(size)
+                run.font.bold = bold
+                run.font.color.rgb = color or DARK_GREY
+
+            _ann("Location", 0.75, bold=True, color=TITLE_RED)
+            _ann(f"Lat: {_lat:.3f}\u00b0", 1.08)
+            _ann(f"Lon: {_lon:.3f}\u00b0", 1.38)
+            _ann("Thresholds", 1.78, bold=True, color=TITLE_RED)
+            _ann(f"Temp > {temp_threshold}\u00b0C", 2.10)
+            _ann(f"GHI > {rad_threshold} W/m\u00b2", 2.40)
+            n_sh = int(mask_sh.sum())
+            n_total = len(mask_sh)
+            _ann("Shading Stats", 2.80, bold=True, color=TITLE_RED)
+            _ann(f"Total daytime pts: {n_total}", 3.12)
+            _ann(f"Shading required: {n_sh}", 3.42)
+            _ann(f"({shading_pct:.1f}% of daytime)", 3.72)
+
+        except Exception as e:
+            _err(slide, e)
+
+        _add_logo(slide)
+
+    _sun_path_shading_slide()
+
+    # ═══════════════════════════════════════════════════════════
+    # SLIDE 4 – ORIENTATION SHADING ANALYSIS TABLE
+    # ═══════════════════════════════════════════════════════════
+    def _orientation_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, f"Orientation Shading Analysis  (Design cutoff: {design_cutoff_angle}\u00b0)")
+        _divider(slide, 0.62)
+
+        try:
+            overheat_df = get_overheating_hours(df, temp_threshold, rad_threshold)
+            if overheat_df.empty:
+                _err(slide, "No overheating hours found with current thresholds.")
+                _add_logo(slide)
+                return
+
+            solar_pos = compute_solar_angles(overheat_df, _lat, _lon, _tz)
+            if solar_pos.empty:
+                _err(slide, "No daytime overheating sun positions found.")
+                _add_logo(slide)
+                return
+
+            orient_df = build_orientation_table(solar_pos, design_cutoff_angle)
+
+            # ── Build matplotlib table ──────────────────────────────
+            fig, ax = plt.subplots(figsize=(13, 5.8), dpi=120)
+            ax.axis("off")
+
+            col_labels = ["Orientation","Rays\nHitting","Min VSA","Max |HSA|",
+                          "D/H\nOverhang","D/W\nFin","Protection %"]
+            table_data = []
+            row_colors = []
+            for _, row in orient_df.iterrows():
+                pct = row["Protection (%)"]
+                if pct is None:
+                    c = "#f5f5f5"
+                elif pct >= 95:
+                    c = "#e8f5e9"
+                elif pct >= 80:
+                    c = "#fff3e0"
+                else:
+                    c = "#ffebee"
+                row_colors.append([c] * 7)
+
+                dh = f"{row['D/H (Overhang)']:.3f}" if row["D/H (Overhang)"] is not None else "—"
+                dw = f"{row['D/W (Fin)']:.3f}"       if row["D/W (Fin)"] is not None else "—"
+                vsa = f"{row['Min VSA (°)']:.1f}\u00b0"  if row["Min VSA (°)"] is not None else "—"
+                hsa = f"{row['Max |HSA| (°)']:.1f}\u00b0" if row["Max |HSA| (°)"] is not None else "—"
+                pct_s = f"{pct:.1f}%" if pct is not None else "—"
+                table_data.append([
+                    row["Orientation"],
+                    str(row["Rays Hitting"]),
+                    vsa, hsa, dh, dw, pct_s
+                ])
+
+            tbl = ax.table(
+                cellText=table_data,
+                colLabels=col_labels,
+                cellColours=row_colors,
+                loc="center",
+                cellLoc="center",
+            )
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(11)
+            tbl.scale(1, 2.1)
+
+            for j in range(len(col_labels)):
+                cell = tbl[0, j]
+                cell.set_facecolor("#1a3a52")
+                cell.set_text_props(color="white", fontweight="bold")
+
+            # Left-align orientation column
+            for i in range(1, len(table_data) + 1):
+                tbl[i, 0].get_text().set_ha("left")
+
+            fig.patch.set_facecolor("white")
+            ax.set_title(
+                f"{len(solar_pos)} overheating daytime sun positions  |  "
+                f"Temp > {temp_threshold}\u00b0C  &  GHI > {rad_threshold} W/m\u00b2",
+                fontsize=10, color="#555", pad=10
+            )
+
+            tmp = _save_fig(fig)
+            plt.close(fig)
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                     width=Inches(SW - 0.54), height=Inches(5.9))
+            os.unlink(tmp)
+
+        except Exception as e:
+            _err(slide, e)
+
+        _add_logo(slide)
+
+    _orientation_slide()
+
+    # ═══════════════════════════════════════════════════════════
+    # SLIDE 5 – SHADING MASK DIAGRAMS (8 orientations, 2×4 grid)
+    # ═══════════════════════════════════════════════════════════
+    def _shading_masks_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Shading Mask Diagrams")
+        _divider(slide, 0.62)
+
+        try:
+            overheat_df = get_overheating_hours(df, temp_threshold, rad_threshold)
+            if overheat_df.empty:
+                _err(slide, "No overheating hours found with current thresholds.")
+                _add_logo(slide)
+                return
+
+            solar_pos = compute_solar_angles(overheat_df, _lat, _lon, _tz)
+            if solar_pos.empty:
+                _err(slide, "No daytime overheating sun positions found.")
+                _add_logo(slide)
+                return
+
+            orient_items = list(_ORIENTATIONS.items())  # 8 items
+
+            # 2 rows × 4 cols grid
+            n_cols = 4
+            cell_w = (SW - 0.54) / n_cols
+            cell_h = (SH - 1.05) / 2  # 2 rows, leave room for title + logo
+            top_start = 0.75
+
+            for idx, (oname, faz) in enumerate(orient_items):
+                col_i = idx % n_cols
+                row_i = idx // n_cols
+                cell_l = 0.27 + col_i * cell_w
+                cell_t = top_start + row_i * cell_h
+
+                geom = compute_shading_geometry(solar_pos, faz)
+                facing = geom[geom["hits_facade"]]
+                other  = geom[~geom["hits_facade"]]
+
+                fig = plt.figure(figsize=(3.0, 2.8), dpi=110, facecolor="white")
+                ax = fig.add_subplot(111, projection="polar")
+                ax.set_theta_zero_location("N")
+                ax.set_theta_direction(-1)
+                ax.set_ylim(0, 90)
+                ax.set_yticks([])
+                ax.set_xticks(np.radians([0, 90, 180, 270]))
+                ax.set_xticklabels(["N","E","S","W"], fontsize=8, fontweight="bold")
+                ax.set_facecolor("#f0f8ff")
+                ax.grid(True, alpha=0.30, linewidth=0.5)
+
+                if not other.empty:
+                    ax.scatter(
+                        np.radians(other["solar_azimuth"]), 90 - other["solar_altitude"],
+                        s=2, c="lightgrey", alpha=0.5, linewidths=0, zorder=2
+                    )
+                if not facing.empty:
+                    ax.scatter(
+                        np.radians(facing["solar_azimuth"]), 90 - facing["solar_altitude"],
+                        s=4, c="#E65100", alpha=0.75, linewidths=0, zorder=3
+                    )
+
+                # Shading cutoff arc
+                rel_az_r = np.linspace(-89, 89, 179)
+                tan_co = np.tan(np.radians(design_cutoff_angle))
+                co_alt = np.degrees(np.arctan(tan_co * np.cos(np.radians(rel_az_r))))
+                co_az  = faz + rel_az_r
+                valid  = co_alt > 0
+                if valid.any():
+                    ax.plot(np.radians(co_az[valid]), 90 - co_alt[valid],
+                            color="#1565C0", linewidth=1.4, linestyle="--", zorder=4)
+
+                # Facade direction
+                ax.plot(np.radians([faz, faz]), [0, 85],
+                        color="#388E3C", linewidth=1.4, zorder=5)
+
+                ax.set_title(oname, fontsize=7, fontweight="bold", pad=4, color="#222")
+                plt.tight_layout(pad=0.3)
+
+                tmp = _save_fig(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(
+                    tmp, Inches(cell_l), Inches(cell_t),
+                    width=Inches(cell_w - 0.05), height=Inches(cell_h - 0.05)
+                )
+                os.unlink(tmp)
+
+            # Legend strip at bottom
+            leg_tb = slide.shapes.add_textbox(
+                Inches(0.27), Inches(SH - LOGO_H - 0.55), Inches(SW - 0.54), Inches(0.35)
+            )
+            leg_tf = leg_tb.text_frame
+            leg_p = leg_tf.paragraphs[0]
+            leg_run = leg_p.add_run()
+            leg_run.text = (
+                "\u25cf Overheating rays (hits facade)  "
+                "\u25cf Overheating (other side)  "
+                "- - Cutoff arc (VSA cut-off)  "
+                "\u2014 Facade direction"
+            )
+            leg_run.font.size = Pt(8)
+            leg_run.font.color.rgb = DARK_GREY
+
+        except Exception as e:
+            _err(slide, e)
+
+        _add_logo(slide)
+
+    _shading_masks_slide()
+
+    # ── Save ──────────────────────────────────────────────────
+    report_bytes = io.BytesIO()
+    prs.save(report_bytes)
+    report_bytes.seek(0)
+    return report_bytes
+
 
 def convert_epw_timezone(tz_offset):
     """Convert EPW numeric timezone to valid pytz timezone string."""
@@ -805,9 +1459,8 @@ def parse_epw(epw_text: str) -> tuple:
     df["relative_humidity"] = pd.to_numeric(df_raw.iloc[:, col_map["relative_humidity"]], errors="coerce")
     df["direct_normal_irradiance"] = pd.to_numeric(df_raw.iloc[:, col_map["direct_normal_irradiance"]], errors="coerce")
     df["diffuse_horizontal_irradiance"] = pd.to_numeric(df_raw.iloc[:, col_map["diffuse_horizontal_irradiance"]], errors="coerce").fillna(0)
-    # Global horizontal irradiance = diffuse horizontal irradiance (simplified, as we don't have solar geometry data here)
-    # In precise calculations, GHI = DNI * sin(altitude) + DHI, but we use DHI as approximation
-    df["global_horizontal_irradiance"] = df["diffuse_horizontal_irradiance"]
+    # Global Horizontal Irradiance from EPW column 13 (Wh/m²)
+    df["global_horizontal_irradiance"] = pd.to_numeric(df_raw.iloc[:, 13], errors="coerce").fillna(0)
     
     # build datetime (note: this may produce NaT for invalid rows)
     df["datetime"] = pd.to_datetime(
@@ -819,13 +1472,16 @@ def parse_epw(epw_text: str) -> tuple:
     return df[["datetime", "dry_bulb_temperature", "relative_humidity", "direct_normal_irradiance", "diffuse_horizontal_irradiance", "global_horizontal_irradiance", "hour"]], metadata
 
 
-def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> None:
+def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> dict:
     """Generate and display an interactive Sun Path Diagram using Plotly.
     
     Args:
         data: DataFrame with datetime and weather data
         metadata: Dictionary containing latitude, longitude, timezone
         chart_type: Type of chart to display - "Direct Normal Radiation", "Global Horizontal Radiation", "Dry Bulb Temperature", or "Sun Path"
+    
+    Returns:
+        Dictionary containing metrics for Shading diagram, or empty dict for other chart types
     """
     try:
         from pvlib import solarposition
@@ -1101,7 +1757,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                         colorscale=colorscale,
                         cmin=colorbar_min,
                         cmax=colorbar_max,
-                        showscale=first_trace,  # Display colorbar on first trace with data
+                        showscale=(first_trace and chart_type != "Shading"),  # Hide colorbar for Shading (binary)
                         colorbar=dict(
                             title=dict(
                                 text=colorbar_title,
@@ -1114,7 +1770,7 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                             tickvals=tickvals,
                             ticktext=ticktext,
                             tickmode="array"
-                        ),
+                        ) if chart_type != "Shading" else None,
                         opacity=0.7,
                         line=dict(width=0.5)
                     ),
@@ -1127,71 +1783,50 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
             first_trace = False  # Only show colorbar on first trace
         
         # ========================
-        # Shading region highlight
+        # Shading metrics calculation (for display below chart)
         # ========================
+        shading_metrics = {}
         if chart_type == "Shading":
-            # Collect all points that require shading (temp > 28°C AND GHI > 315 Wh/m²)
+            # Calculate metrics
             ghi_col = solpos_merged.get("global_horizontal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
             temp_col = solpos_merged.get("dry_bulb_temperature", pd.Series(20, index=solpos_merged.index)).fillna(20)
+            
+            # Total sunshine hours (GHI > 300 Wh/m²)
+            sunshine_mask = ghi_col > 300
+            sunshine_hours = sunshine_mask.sum() / 2  # Each data point is 30 minutes (0.5 hours)
+            
+            # Required shading hours (temp > 28°C AND GHI > 315 Wh/m²)
             shading_mask = (temp_col > 28) & (ghi_col > 315)
-            shade_points = solpos_merged[shading_mask]
-
-            if not shade_points.empty:
-                # Compute summer solstice path to use as upper boundary cap
-                # (shading region must not extend above the summer solstice arc)
-                summer_date = pd.Timestamp("2020-06-21")
-                summer_times = pd.date_range(
-                    summer_date, summer_date + pd.Timedelta("1D"),
-                    freq="5min", tz=tz, inclusive="left"
+            shading_hours = shading_mask.sum() / 2  # Each data point is 30 minutes (0.5 hours)
+            
+            shading_metrics = {
+                "total_sunshine_hours": sunshine_hours,
+                "required_shading_hours": shading_hours
+            }
+            
+            # Add legend items for binary shading colors
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=[None],
+                    theta=[None],
+                    mode="markers",
+                    marker=dict(size=12, color="#FFF9C4", symbol="square"),
+                    name="No Shading",
+                    showlegend=True,
+                    hoverinfo="skip"
                 )
-                summer_sol = solarposition.get_solarposition(summer_times, lat, lon)
-                summer_sol = summer_sol[summer_sol["apparent_elevation"] > 0]
-                summer_sol["r_summer"] = 90 - summer_sol["apparent_elevation"]
-
-                # Per-azimuth binning with a wide window (±9°) to bridge gaps between
-                # hour columns (~15–20° apart) without creating separate blobs.
-                az_step = 2
-                half_w = 9
-                az_bins = np.arange(0, 360, az_step)
-
-                out_az, out_r_outer, out_r_inner = [], [], []
-                for az in az_bins:
-                    shade_near = shade_points[
-                        (shade_points["azimuth"] >= az - half_w) &
-                        (shade_points["azimuth"] < az + half_w)
-                    ]
-                    if shade_near.empty:
-                        continue
-                    summer_near = summer_sol[
-                        (summer_sol["azimuth"] >= az - half_w) &
-                        (summer_sol["azimuth"] < az + half_w)
-                    ]
-                    r_outer = shade_near["r"].max()   # lowest altitude  = outermost edge
-                    r_inner = shade_near["r"].min()   # highest altitude = innermost edge
-                    # Cap inner edge at summer solstice so region stays below the arc
-                    if not summer_near.empty:
-                        r_inner = max(r_inner, summer_near["r_summer"].min())
-                    out_az.append(az)
-                    out_r_outer.append(r_outer)
-                    out_r_inner.append(r_inner)
-
-                if out_az:
-                    region_az = out_az + out_az[::-1] + [out_az[0]]
-                    region_r = out_r_outer + out_r_inner[::-1] + [out_r_outer[0]]
-
-                    fig.add_trace(
-                        go.Scatterpolar(
-                            r=region_r,
-                            theta=region_az,
-                            mode="lines",
-                            fill="toself",
-                            fillcolor="rgba(230, 81, 0, 0.18)",
-                            line=dict(color="rgba(230, 81, 0, 0.45)", width=1.2),
-                            name="Shading Required Zone",
-                            showlegend=True,
-                            hoverinfo="skip",
-                        )
-                    )
+            )
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=[None],
+                    theta=[None],
+                    mode="markers",
+                    marker=dict(size=12, color="#E65100", symbol="square"),
+                    name="Shading Required",
+                    showlegend=True,
+                    hoverinfo="skip"
+                )
+            )
         
         # ========================
         # Add special solar dates (equinoxes and solstices)
@@ -1415,8 +2050,265 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         # Display with Streamlit
         st.plotly_chart(fig, use_container_width=True)
         
+        # Return metrics if available
+        return shading_metrics if chart_type == "Shading" else {}
+        
     except Exception as e:
         st.error(f"Error generating Sun Path Diagram: {str(e)}")
+        return {}
+
+# =====================================================================================
+# SHADING ANALYSIS HELPER FUNCTIONS
+# =====================================================================================
+
+_MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+_ORIENTATIONS = {
+    "North (0°)": 0,
+    "North-East (45°)": 45,
+    "East (90°)": 90,
+    "South-East (135°)": 135,
+    "South (180°)": 180,
+    "South-West (225°)": 225,
+    "West (270°)": 270,
+    "North-West (315°)": 315,
+}
+
+
+def build_thermal_matrix(epw_df: pd.DataFrame, temp_threshold: float, rad_threshold: float):
+    """Build a 24×12 matrix of mean temperature and GHI per (hour, month).
+
+    Returns:
+        temp_matrix:   24×12 DataFrame of mean dry bulb temperature
+        rad_matrix:    24×12 DataFrame of mean GHI
+        overheat_mask: bool 24×12 DataFrame where both thresholds are exceeded
+    """
+    d = epw_df.copy()
+    d["_month"] = d["datetime"].dt.month
+    d["_hour"] = d["hour"].astype(int)
+
+    temp_pivot = (
+        d.groupby(["_hour", "_month"])["dry_bulb_temperature"]
+        .mean()
+        .unstack("_month")
+    )
+    rad_pivot = (
+        d.groupby(["_hour", "_month"])["global_horizontal_irradiance"]
+        .mean()
+        .unstack("_month")
+    )
+
+    temp_pivot.columns = _MONTH_SHORT
+    rad_pivot.columns = _MONTH_SHORT
+    temp_pivot.index.name = "Hour"
+    rad_pivot.index.name = "Hour"
+
+    overheat_mask = (temp_pivot > temp_threshold) & (rad_pivot > rad_threshold)
+    return temp_pivot, rad_pivot, overheat_mask
+
+
+def get_overheating_hours(epw_df: pd.DataFrame, temp_threshold: float, rad_threshold: float) -> pd.DataFrame:
+    """Return EPW rows where temperature > temp_threshold AND GHI > rad_threshold."""
+    mask = (
+        (epw_df["dry_bulb_temperature"] > temp_threshold) &
+        (epw_df["global_horizontal_irradiance"] > rad_threshold)
+    )
+    return epw_df[mask].copy().reset_index(drop=True)
+
+
+def compute_solar_angles(overheat_df: pd.DataFrame, lat: float, lon: float, tz_str: str) -> pd.DataFrame:
+    """Compute solar altitude and azimuth for each overheating timestamp using pvlib.
+
+    Returns overheat_df rows above the horizon with solar_altitude and solar_azimuth columns.
+    """
+    from pvlib import solarposition
+
+    try:
+        tz = pytz.timezone(tz_str)
+    except Exception:
+        tz = pytz.UTC
+
+    times = pd.DatetimeIndex(overheat_df["datetime"].values)
+    if times.tz is None:
+        times = times.tz_localize(tz)
+
+    # Normalise to year 2020 for consistency with plot_sun_path
+    times_2020 = times.map(lambda t: t.replace(year=2020))
+    solpos = solarposition.get_solarposition(times_2020, lat, lon)
+
+    result = overheat_df.copy()
+    result["solar_altitude"] = solpos["apparent_elevation"].values
+    result["solar_azimuth"] = solpos["azimuth"].values
+
+    # Keep only sun-above-horizon positions
+    result = result[result["solar_altitude"] > 0].copy().reset_index(drop=True)
+    return result
+
+
+def compute_shading_geometry(solar_positions: pd.DataFrame, facade_azimuth: float) -> pd.DataFrame:
+    """Compute VSA, HSA and facade-hit flag for a given facade azimuth.
+
+    Formulas:
+        relative_azimuth = solar_azimuth − facade_azimuth
+        VSA = arctan( tan(altitude) / cos(relative_azimuth) )
+        HSA = arctan( sin(relative_azimuth) / tan(altitude) )
+    """
+    alt_rad = np.radians(solar_positions["solar_altitude"].values)
+    rel_az = solar_positions["solar_azimuth"].values - facade_azimuth
+    rel_az = ((rel_az + 180) % 360) - 180          # normalise to −180…+180
+    rel_az_rad = np.radians(rel_az)
+
+    hits_facade = np.abs(rel_az) < 90
+
+    tan_alt = np.tan(alt_rad)
+    cos_rel = np.cos(rel_az_rad)
+    sin_rel = np.sin(rel_az_rad)
+
+    cos_rel_safe = np.where(np.abs(cos_rel) < 1e-9, np.sign(cos_rel + 1e-18) * 1e-9, cos_rel)
+    tan_alt_safe = np.where(np.abs(tan_alt) < 1e-9, 1e-9, tan_alt)
+
+    vsa_deg = np.degrees(np.arctan(tan_alt / cos_rel_safe))
+    hsa_deg = np.degrees(np.arctan(sin_rel / tan_alt_safe))
+
+    result = solar_positions.copy()
+    result["relative_azimuth"] = rel_az
+    result["VSA"] = vsa_deg
+    result["HSA"] = hsa_deg
+    result["hits_facade"] = hits_facade
+    return result
+
+
+def build_orientation_table(solar_positions: pd.DataFrame, design_cutoff_angle: float) -> pd.DataFrame:
+    """Build the 8-orientation shading analysis table."""
+    rows = []
+    for orient_name, facade_az in _ORIENTATIONS.items():
+        geom = compute_shading_geometry(solar_positions, facade_az)
+        facing = geom[geom["hits_facade"]]
+
+        if facing.empty:
+            rows.append({
+                "Orientation": orient_name,
+                "Rays Hitting": 0,
+                "Min VSA (°)": None,
+                "Max |HSA| (°)": None,
+                "D/H (Overhang)": None,
+                "D/W (Fin)": None,
+                "Protection (%)": 100.0,
+            })
+            continue
+
+        min_vsa = float(facing["VSA"].min())
+        max_abs_hsa = float(facing["HSA"].abs().max())
+
+        # D/H = 1/tan(Min VSA)  — min VSA is the hardest ray to block (shallowest sun)
+        # Capped at 1.0 (overhang deeper than window height is impractical to display)
+        tan_min_vsa = np.tan(np.radians(min_vsa))
+        dh = round(min(1.0, float(1.0 / tan_min_vsa)) if abs(tan_min_vsa) > 1e-6 else 1.0, 3)
+
+        # D/W = tan(Max |HSA|)  — max HSA is the hardest lateral ray to block
+        # Capped at 1.0 (fin deeper than window width is impractical to display)
+        dw = round(min(1.0, float(np.tan(np.radians(max_abs_hsa)))), 3)
+
+        # Protection: rays with VSA >= design_cutoff_angle are blocked by the overhang
+        # (steeper sun = shallower shadow angle = overhang blocks it)
+        blocked = int((facing["VSA"] >= design_cutoff_angle).sum())
+        protection_pct = (blocked / len(facing)) * 100
+
+        rows.append({
+            "Orientation": orient_name,
+            "Rays Hitting": int(len(facing)),
+            "Min VSA (°)": round(min_vsa, 1),
+            "Max |HSA| (°)": round(max_abs_hsa, 1),
+            "D/H (Overhang)": dh,
+            "D/W (Fin)": dw,
+            "Protection (%)": round(protection_pct, 1),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def make_shading_mask_chart(solar_positions: pd.DataFrame, facade_azimuth: float,
+                             design_cutoff_angle: float):
+    """Create a small polar chart showing overheating sun positions and shading cutoff arc."""
+    import plotly.graph_objects as go
+
+    geom = compute_shading_geometry(solar_positions, facade_azimuth)
+    facing = geom[geom["hits_facade"]]
+    other = geom[~geom["hits_facade"]]
+
+    fig = go.Figure()
+
+    # Non-facing overheating positions (grey background context)
+    if not other.empty:
+        fig.add_trace(go.Scatterpolar(
+            r=(90 - other["solar_altitude"]).tolist(),
+            theta=other["solar_azimuth"].tolist(),
+            mode="markers",
+            marker=dict(size=3, color="lightgrey", opacity=0.5),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+    # Facing overheating positions (deep orange / red)
+    if not facing.empty:
+        fig.add_trace(go.Scatterpolar(
+            r=(90 - facing["solar_altitude"]).tolist(),
+            theta=facing["solar_azimuth"].tolist(),
+            mode="markers",
+            marker=dict(size=4, color="#E65100", opacity=0.75),
+            showlegend=False,
+            hovertemplate=(
+                "Alt: %{text}<br>Az: %{theta:.0f}°<extra></extra>"
+            ),
+            text=[f"{a:.1f}°" for a in facing["solar_altitude"]],
+        ))
+
+    # Shading cutoff arc (VSA = design_cutoff_angle contour)
+    rel_az_range = np.linspace(-89, 89, 179)
+    tan_cutoff = np.tan(np.radians(design_cutoff_angle))
+    cutoff_alt = np.degrees(np.arctan(tan_cutoff * np.cos(np.radians(rel_az_range))))
+    cutoff_az_abs = facade_azimuth + rel_az_range
+    valid = cutoff_alt > 0
+    if valid.any():
+        fig.add_trace(go.Scatterpolar(
+            r=(90 - cutoff_alt[valid]).tolist(),
+            theta=cutoff_az_abs[valid].tolist(),
+            mode="lines",
+            line=dict(color="#1565C0", width=2, dash="dash"),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+    # Facade direction indicator (green radial line)
+    fig.add_trace(go.Scatterpolar(
+        r=[0, 85],
+        theta=[facade_azimuth, facade_azimuth],
+        mode="lines",
+        line=dict(color="#388E3C", width=2),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+
+    fig.update_layout(
+        polar=dict(
+            bgcolor="rgba(240, 248, 255, 0.6)",
+            radialaxis=dict(visible=False, range=[0, 90]),
+            angularaxis=dict(
+                tickfont=dict(size=7),
+                rotation=90,
+                direction="clockwise",
+                tickvals=[0, 90, 180, 270],
+                ticktext=["N", "E", "S", "W"],
+            ),
+        ),
+        showlegend=False,
+        height=180,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
+
 
 # === MAIN LAYOUT ===
 col_left, col_right = st.columns([0.85, 2.15], gap="small")
@@ -1471,17 +2363,68 @@ try:
         # """, unsafe_allow_html=True)
         
         # Time range (hour of use) slider for diurnal/peak analysis
-        st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
-        hour_range = st.slider(
-            "Select hours (start - end)",
-            min_value=0,
-            max_value=23,
-            value=(8, 18),
-            step=1,
-            key="hour_range",
-            label_visibility="collapsed",
-            width=300
-        )
+        if selected_parameter == "Sun Path":
+            # For Sun Path, always use full 0-23 range
+            hour_range = (0, 23)
+
+            # ── Shading Analysis Parameters ─────────────────────────────────────
+            st.markdown('<div class="control-section-header">🌡️ Overheating Thresholds</div>', unsafe_allow_html=True)
+            temp_threshold = st.number_input(
+                "Temperature Threshold (°C)",
+                value=28.0,
+                step=0.5,
+                key="temp_threshold",
+                help="Hours with dry-bulb temperature above this value are flagged",
+                width=300,
+            )
+            rad_threshold = st.number_input(
+                "Radiation Threshold (W/m²)",
+                value=315.0,
+                step=10.0,
+                key="rad_threshold",
+                help="Hours with Global Horizontal Irradiance above this value are flagged",
+                width=300,
+            )
+
+            st.markdown('<div class="control-section-header">📍 Location</div>', unsafe_allow_html=True)
+            _lat_default = float(metadata.get("latitude") or 0.0)
+            _lon_default = float(metadata.get("longitude") or 0.0)
+            shading_lat = st.number_input(
+                "Latitude", value=_lat_default, step=0.1, key="shading_lat",
+                help="Auto-read from EPW metadata",
+                width=300
+            )
+            shading_lon = st.number_input(
+                "Longitude", value=_lon_default, step=0.1, key="shading_lon",
+                help="Auto-read from EPW metadata",
+                width=300
+            )
+
+            
+
+            st.markdown('<div class="control-section-header">📐 Design Parameters</div>', unsafe_allow_html=True)
+            design_cutoff_angle = st.number_input(
+                "Design Cutoff Angle (°)",
+                value=45.0,
+                step=1.0,
+                min_value=5.0,
+                max_value=89.0,
+                key="design_cutoff_angle",
+                help="Solar altitude cutoff used to assess shading device protection",
+                width=300
+            )
+        else:
+            st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
+            hour_range = st.slider(
+                "Select hours (start - end)",
+                min_value=0,
+                max_value=23,
+                value=(8, 18),
+                step=1,
+                key="hour_range",
+                label_visibility="collapsed",
+                width=300
+            )
         
         # Date range selection
         st.markdown('<div class="control-section-header">📅 Date Range</div>', unsafe_allow_html=True)
@@ -1530,49 +2473,74 @@ try:
         with col3:
             pass
         
-        # # Generate Report Button
-        st.markdown('<div class="control-section-header">📊 Report(PowerPoint)</div>', unsafe_allow_html=True)
-        # if st.button("Generate Report", use_container_width=False, key="generate_report_btn", width=300):
-        #     st.session_state.generate_report = True
+        # ── Report (PowerPoint) ──────────────────────────────────
+        st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
+
+        _active_chart = st.session_state.get("sun_chart_type", "Sun Path")
+        _is_shading_mode = (selected_parameter == "Sun Path" and _active_chart == "Shading")
+
         try:
-            # Get filter parameters from left column
             start_month_num = st.session_state.start_month_idx + 1
-            end_month_num = st.session_state.end_month_idx + 1
+            end_month_num   = st.session_state.end_month_idx + 1
             year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
-            
+
             start_date = pd.to_datetime(f"{year}-{start_month_num}-01").date()
             if end_month_num == 12:
                 end_date = pd.to_datetime(f"{year}-12-31").date()
             else:
                 end_date = (pd.to_datetime(f"{year}-{end_month_num+1}-01") - pd.Timedelta(days=1)).date()
-            
+
             start_hour, end_hour = st.session_state.get("hour_range", (8, 18))
-            
-            # Generate the report
-            report_bytes = generate_pptx_report(
-                df, 
-                start_date, 
-                end_date, 
-                start_hour, 
-                end_hour, 
-                selected_parameter
-            )
-            
-            # Offer download
-            st.download_button(
-                label="Download Report",
-                data=report_bytes,
-                file_name=f"Climate_Analysis_Report_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                key="download_report",
-                width=300
-            )
-            
-            # Reset the flag
-            # st.session_state.generate_report = False
-            
+
+            if _is_shading_mode:
+                # ── Shading Analysis Report ──────────────────────────
+                _temp_thr = float(st.session_state.get("temp_threshold", 28.0))
+                _rad_thr  = float(st.session_state.get("rad_threshold", 315.0))
+                _sh_lat   = float(st.session_state.get("shading_lat",  metadata.get("latitude")  or 0.0))
+                _sh_lon   = float(st.session_state.get("shading_lon",  metadata.get("longitude") or 0.0))
+                _cutoff   = float(st.session_state.get("design_cutoff_angle", 45.0))
+                _tz_str   = metadata.get("timezone", "UTC")
+
+                shading_report = generate_shading_pptx_report(
+                    df,
+                    metadata,
+                    temp_threshold=_temp_thr,
+                    rad_threshold=_rad_thr,
+                    lat=_sh_lat,
+                    lon=_sh_lon,
+                    tz_str=_tz_str,
+                    design_cutoff_angle=_cutoff,
+                )
+                st.download_button(
+                    label="⬇️ Download Shading Report",
+                    data=shading_report,
+                    file_name="Shading_Analysis_Report.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    key="download_shading_report",
+                    width=300,
+                )
+            else:
+                # ── Climate Analysis Report ──────────────────────────
+                report_bytes = generate_pptx_report(
+                    df,
+                    start_date,
+                    end_date,
+                    start_hour,
+                    end_hour,
+                    selected_parameter,
+                    metadata=metadata,
+                )
+                st.download_button(
+                    label="⬇️ Download Climate Report",
+                    data=report_bytes,
+                    file_name=f"Climate_Analysis_Report_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    key="download_report",
+                    width=300,
+                )
+
         except Exception as e:
-            st.error(f"❌ Failed to generate report: {str(e)}")
+            st.error(f"\u274c Failed to generate report: {str(e)}")
         
 except Exception as e:
     with col_left:
@@ -1645,10 +2613,263 @@ with col_right:
         with col_selector[0]:
             chart_type = st.selectbox(
                 "Chart Type:",
-            ["Sun Path","Dry Bulb Temperature", "Direct Normal Radiation", "Global Horizontal Radiation","Shading"],
+                ["Sun Path","Dry Bulb Temperature", "Direct Normal Radiation", "Global Horizontal Radiation","Shading"],
+                key="sun_chart_type",
             )
         
-        plot_sun_path(df, metadata, chart_type)
+        metrics = plot_sun_path(df, metadata, chart_type)
+        
+        # Display metrics for Shading chart
+        if chart_type == "Shading" and metrics:
+            st.markdown("---")
+            st.markdown("<h4 style='text-align: left;'>📊 Shading Metrics</h4>", unsafe_allow_html=True)
+            metric_col1, metric_col2 = st.columns(2)
+            
+            with metric_col1:
+                st.metric(
+                    label="Total Sunshine Hours",
+                    value=f"{metrics.get('total_sunshine_hours', 0):.1f}",
+                    help="Hours with Global Horizontal Irradiance > 300 Wh/m²"
+                )
+            
+            with metric_col2:
+                st.metric(
+                    label="Required Shading Hours",
+                    value=f"{metrics.get('required_shading_hours', 0):.1f}",
+                    help="Hours where Temperature > 28°C AND GHI > 315 Wh/m²"
+                )
+
+        # =====================================================================
+        # EXTENDED SHADING ANALYSIS – shown when "Shading" chart type is active
+        # =====================================================================
+        if chart_type == "Shading":
+            import plotly.graph_objects as go
+
+            # Read threshold/location values set by the sidebar inputs
+            _temp_thr = float(st.session_state.get("temp_threshold", 28.0))
+            _rad_thr = float(st.session_state.get("rad_threshold", 315.0))
+            _lat = float(st.session_state.get("shading_lat", metadata.get("latitude") or 0.0))
+            _lon = float(st.session_state.get("shading_lon", metadata.get("longitude") or 0.0))
+            _cutoff = float(st.session_state.get("design_cutoff_angle", 45.0))
+            _tz_str = metadata.get("timezone", "UTC")
+
+            # ── 1. THERMAL & RADIATION MATRIX ─────────────────────────────────
+            st.markdown("---")
+            st.markdown(
+                "<h4 style='margin-bottom:4px;'>Thermal &amp; Radiation Matrix"
+                f"<span style='font-size:13px; font-weight:400; color:#666; margin-left:12px;'>"
+                f"Black border = Temp &gt; {_temp_thr}°C AND GHI &gt; {_rad_thr} W/m²</span></h4>",
+                unsafe_allow_html=True,
+            )
+
+            try:
+                temp_matrix, rad_matrix, overheat_mask = build_thermal_matrix(df, _temp_thr, _rad_thr)
+                hours_labels = [f"{h:02d}:00" for h in range(24)]
+
+                # Build hover text
+                hover_text = []
+                for h_idx in range(24):
+                    row_txt = []
+                    for m_idx in range(12):
+                        t_v = temp_matrix.iloc[h_idx, m_idx]
+                        r_v = rad_matrix.iloc[h_idx, m_idx]
+                        warn = " ⚠️ OVERHEATING" if overheat_mask.iloc[h_idx, m_idx] else ""
+                        row_txt.append(
+                            f"<b>{hours_labels[h_idx]}, {_MONTH_SHORT[m_idx]}</b><br>"
+                            f"Avg Temp: {t_v:.1f}°C<br>"
+                            f"Avg GHI: {r_v:.0f} W/m²{warn}"
+                        )
+                    hover_text.append(row_txt)
+
+                fig_matrix = go.Figure(go.Heatmap(
+                    z=temp_matrix.values,
+                    x=_MONTH_SHORT,
+                    y=hours_labels,
+                    colorscale="RdYlBu_r",
+                    colorbar=dict(
+                        title=dict(text="°C", side="right"),
+                        thickness=14,
+                        len=0.8,
+                    ),
+                    text=hover_text,
+                    hovertemplate="%{text}<extra></extra>",
+                    showscale=True,
+                ))
+
+                # Overlay orange outlines on overheating cells
+                shapes = []
+                for h_idx in range(24):
+                    for m_idx in range(12):
+                        if overheat_mask.iloc[h_idx, m_idx]:
+                            shapes.append(dict(
+                                type="rect",
+                                xref="x", yref="y",
+                                x0=m_idx - 0.5, x1=m_idx + 0.5,
+                                y0=h_idx - 0.5, y1=h_idx + 0.5,
+                                line=dict(color="#080808", width=2.5),
+                                fillcolor="rgba(0,0,0,0)",
+                            ))
+
+                n_overheat = int(overheat_mask.values.sum())
+                fig_matrix.update_layout(
+                    xaxis_title="Month",
+                    yaxis_title="Hour",
+                    height=540,
+                    shapes=shapes,
+                    template="plotly_white",
+                    margin=dict(l=70, r=90, t=20, b=50),
+                    annotations=[dict(
+                        x=1.13, y=0.5, xref="paper", yref="paper",
+                        text=f"<b>{n_overheat}</b><br>cells<br>overheat",
+                        showarrow=False,
+                        font=dict(size=11, color="#E65100"),
+                        align="center",
+                    )],
+                )
+
+                st.plotly_chart(fig_matrix, use_container_width=True)
+
+            except Exception as _e:
+                st.error(f"Could not build Thermal Matrix: {_e}")
+
+            # ── 2. ORIENTATION SHADING ANALYSIS ───────────────────────────────
+            st.markdown("---")
+            st.markdown(
+                "<h4 style='margin-bottom:4px;'>🏗️ Orientation Shading Analysis"
+                f"<span style='font-size:13px; font-weight:400; color:#666; margin-left:12px;'>"
+                f"Design cutoff angle: {_cutoff}°</span></h4>",
+                unsafe_allow_html=True,
+            )
+
+            try:
+                overheat_df_sa = get_overheating_hours(df, _temp_thr, _rad_thr)
+                if overheat_df_sa.empty:
+                    st.info("No overheating hours found with current thresholds.")
+                else:
+                    with st.spinner("Computing solar positions for overheating hours…"):
+                        solar_pos = compute_solar_angles(overheat_df_sa, _lat, _lon, _tz_str)
+
+                    if solar_pos.empty:
+                        st.info("No daytime overheating sun positions found.")
+                    else:
+                        n_total = len(solar_pos)
+                        st.caption(
+                            f"**{n_total}** overheating daytime sun positions "
+                            f"({len(overheat_df_sa)} EPW rows → {n_total} above horizon)"
+                        )
+
+                        orient_df = build_orientation_table(solar_pos, _cutoff)
+
+                        # Protection percentage coloured badge
+                        def _protection_badge(pct):
+                            if pct is None:
+                                return "—"
+                            color = "#4caf50" if pct >= 95 else ("#ff9800" if pct >= 80 else "#f44336")
+                            return (
+                                f'<span style="background:{color}; color:white; padding:2px 8px; '
+                                f'border-radius:10px; font-weight:600; font-size:12px;">'
+                                f'{pct:.1f}%</span>'
+                            )
+
+                        html_rows = ""
+                        for _, _row in orient_df.iterrows():
+                            badge = _protection_badge(_row.get("Protection (%)"))
+                            _dh = f"{_row['D/H (Overhang)']:.3f}" if _row["D/H (Overhang)"] is not None else "—"
+                            _dw = f"{_row['D/W (Fin)']:.3f}" if _row["D/W (Fin)"] is not None else "—"
+                            _min_vsa = f"{_row['Min VSA (°)']:.1f}°" if _row["Min VSA (°)"] is not None else "—"
+                            _max_hsa = f"{_row['Max |HSA| (°)']:.1f}°" if _row["Max |HSA| (°)"] is not None else "—"
+                            html_rows += (
+                                "<tr>"
+                                f"<td style='padding:6px 12px; font-weight:600;'>{_row['Orientation']}</td>"
+                                f"<td style='padding:6px 12px; text-align:center;'>{_row['Rays Hitting']}</td>"
+                                f"<td style='padding:6px 12px; text-align:center;'>{_min_vsa}</td>"
+                                f"<td style='padding:6px 12px; text-align:center;'>{_max_hsa}</td>"
+                                f"<td style='padding:6px 12px; text-align:center;'>{_dh}</td>"
+                                f"<td style='padding:6px 12px; text-align:center;'>{_dw}</td>"
+                                f"<td style='padding:6px 12px; text-align:center;'>{badge}</td>"
+                                "</tr>"
+                            )
+
+                        st.markdown(f"""
+<style>
+.shading-table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+.shading-table th {{
+    background: #1a3a52; color: white; padding: 8px 12px;
+    text-align: center; font-weight: 600; letter-spacing: 0.3px;
+}}
+.shading-table th:first-child {{ text-align: left; }}
+.shading-table tr:nth-child(even) {{ background: #f5f7fa; }}
+.shading-table tr:hover {{ background: #e8f4f8; }}
+.shading-table td {{ border-bottom: 1px solid #e0e0e0; }}
+</style>
+<table class="shading-table">
+<thead>
+  <tr>
+    <th>Orientation</th>
+    <th>Rays Hitting</th>
+    <th>Min VSA</th>
+    <th>Max |HSA|</th>
+    <th>D/H (Overhang)</th>
+    <th>D/W (Fin)</th>
+    <th>Protection %</th>
+  </tr>
+</thead>
+<tbody>
+  {html_rows}
+</tbody>
+</table>
+<p style='font-size:11px; color:#888; margin-top:6px;'>
+  <b>D/H</b> = horizontal overhang depth-to-height ratio &nbsp;|&nbsp;
+  <b>D/W</b> = vertical fin depth-to-width ratio &nbsp;|&nbsp;
+  Protection % = overheating rays blocked at design cutoff angle &nbsp;
+  <span style='color:#4caf50; font-weight:600;'>■</span> ≥95% &nbsp;
+  <span style='color:#ff9800; font-weight:600;'>■</span> 80–95% &nbsp;
+  <span style='color:#f44336; font-weight:600;'>■</span> &lt;80%
+</p>
+""", unsafe_allow_html=True)
+
+                        # ── 3. SHADING MASK MINI DIAGRAMS ─────────────────────
+                        st.markdown(
+                            "<h5 style='margin-top:22px; margin-bottom:4px;'>"
+                            "🔵 Shading Mask Diagrams</h5>"
+                            "<p style='font-size:12px; color:#666; margin-bottom:10px;'>"
+                            "<span style='color:#E65100; font-weight:600;'>●</span> Overheating (hits façade) &nbsp;|&nbsp; "
+                            "<span style='color:lightgrey; font-weight:600;'>●</span> Overheating (other side) &nbsp;|&nbsp; "
+                            "<span style='color:#1565C0; font-weight:600;'>- -</span> VSA cutoff arc &nbsp;|&nbsp; "
+                            "<span style='color:#388E3C; font-weight:600;'>—</span> Façade direction</p>",
+                            unsafe_allow_html=True,
+                        )
+
+                        orient_pairs = list(_ORIENTATIONS.items())
+                        for _row_start in range(0, 8, 4):
+                            dial_cols = st.columns(4)
+                            for _col_idx, (_oname, _faz) in enumerate(
+                                orient_pairs[_row_start: _row_start + 4]
+                            ):
+                                with dial_cols[_col_idx]:
+                                    st.markdown(
+                                        f"<p style='font-size:11px; font-weight:600;"
+                                        f" text-align:center; margin-bottom:2px;'>{_oname}</p>",
+                                        unsafe_allow_html=True,
+                                    )
+                                    _mini_fig = make_shading_mask_chart(
+                                        solar_pos, _faz, _cutoff
+                                    )
+                                    _safe_key = (
+                                        _oname.replace(" ", "_")
+                                              .replace("(", "")
+                                              .replace(")", "")
+                                              .replace("°", "deg")
+                                    )
+                                    st.plotly_chart(
+                                        _mini_fig,
+                                        use_container_width=True,
+                                        key=f"mini_{_safe_key}",
+                                    )
+
+            except Exception as _e:
+                st.error(f"Could not build Orientation Shading Analysis: {_e}")
+
     else:
                 # Create tab buttons
         tabs_col1, tabs_col2, tabs_col3, tabs_col4, tabs_col5 = st.columns(5, gap="small")
