@@ -419,15 +419,15 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         run.font.bold = True
         run.font.color.rgb = WHITE
 
-        # Subtitle
+        # Subtitle - City/Location name
         tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.85), Inches(SW - 1.2), Inches(0.7))
         tf2 = tb2.text_frame
         p2 = tf2.paragraphs[0]
         run2 = p2.add_run()
-        run2.text = (
-            f"Period: {start_date.strftime('%B %d')} \u2013 {end_date.strftime('%B %d, %Y')}  "
-            f"|  Hours: {start_hour:02d}:00 \u2013 {end_hour:02d}:00"
-        )
+        _city = metadata.get("city", "") if metadata else ""
+        _location = metadata.get("location", "") if metadata else ""
+        location_display = _city if _city else (_location if _location else "Location")
+        run2.text = f"{location_display}"
         run2.font.size = Pt(16)
         run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
 
@@ -532,7 +532,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
             ax.set_xticks(x)
             ax.set_xticklabels(months_lbl, fontsize=10)
             ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
-            ax.set_title('Monthly Temperature Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.set_title('Monthly Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
             ax.grid(True, alpha=0.25, linestyle='--', axis='y')
             ax.set_facecolor('#fafafa')
@@ -660,7 +660,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
             ax.set_xticklabels(months_lbl, fontsize=10)
             ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
             ax.set_ylim(0, 110)
-            ax.set_title('Monthly Relative Humidity Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.set_title('Monthly Relative Humidity Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
             ax.grid(True, alpha=0.25, linestyle='--', axis='y')
             ax.set_facecolor('#fafafa')
@@ -838,6 +838,158 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
     _make_sun_path_slide()
 
     # ═══════════════════════════════════════════════════════════════════════════
+    # SHADING ANALYSIS SLIDE
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _make_shading_summary_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Shading Strategy")
+        _add_divider(slide, 0.62)
+
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        tf = tb.text_frame
+        tf.word_wrap = True
+
+        # Solar Geometry & Shading Analysis
+        p = tf.paragraphs[0]
+        p.text = "Solar Geometry & Shading Analysis"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_after = Pt(4)
+
+        try:
+            # Extract metadata for location
+            _meta = metadata or {}
+            _lat = _meta.get("latitude")
+            _lon = _meta.get("longitude")
+            _tz_str = _meta.get("timezone", "UTC")
+            
+            if _lat is None or _lon is None:
+                raise ValueError("Latitude/Longitude not available")
+            
+            from pvlib import solarposition as _solpos_lib_shade
+            import pytz as _pytz_shade
+            
+            try:
+                _tz_obj = _pytz_shade.timezone(_tz_str)
+            except Exception:
+                _tz_obj = _pytz_shade.UTC
+            
+            # Calculate solar angles for Key dates
+            summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz_obj)
+            ssum = _solpos_lib_shade.get_solarposition(summer_dt, _lat, _lon)
+            noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
+            
+            winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz_obj)
+            swin = _solpos_lib_shade.get_solarposition(winter_dt, _lat, _lon)
+            noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
+            
+            p = tf.add_paragraph()
+            p.text = f"• Summer Solstice (Jun 21): Solar altitude at noon = {noon_alt_sum:.1f}°"
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(3)
+            
+            p = tf.add_paragraph()
+            p.text = f"• Winter Solstice (Dec 21): Solar altitude at noon = {noon_alt_win:.1f}°"
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(3)
+            
+            # Calculate shading metrics from filtered data
+            ghi_col = filtered_df.get("global_horizontal_irradiance", pd.Series(0))
+            if len(ghi_col) == 0:
+                ghi_col = pd.Series(0, index=filtered_df.index)
+            ghi_col = ghi_col.fillna(0)
+            
+            temp_col = filtered_df.get("dry_bulb_temperature", pd.Series(20))
+            if len(temp_col) == 0:
+                temp_col = pd.Series(20, index=filtered_df.index)
+            temp_col = temp_col.fillna(20)
+            
+            # Shading thresholds: temp > 28°C AND GHI > 315 Wh/m²
+            shading_needed = (temp_col > 28) & (ghi_col > 315)
+            shading_hours = shading_needed.sum() / 2  # Each row is 30 minutes
+            total_observation_hours = len(filtered_df) / 2
+            
+            if total_observation_hours > 0:
+                shading_pct = (shading_hours / total_observation_hours) * 100
+            else:
+                shading_pct = 0
+            
+            p = tf.add_paragraph()
+            p.text = f"• Shading required: {shading_hours:.0f} hours ({shading_pct:.1f}% of period)"
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(6)
+        except Exception as e:
+            p = tf.add_paragraph()
+            p.text = "• Solar altitude and shading data not available"
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.space_after = Pt(6)
+
+        # Shading Recommendations
+        p = tf.add_paragraph()
+        p.text = "Shading Recommendations"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(4)
+        p.space_after = Pt(4)
+
+        recommendations = [
+            "• South-facing facades: Use horizontal overhangs (louvers) or shading devices to block summer sun while allowing winter sunlight penetration",
+            "• East/West facades: Use vertical fins or combination of overhangs and fins to minimize morning/afternoon heat gain",
+            "• North-facing facades: Minimal shading required; prioritize daylighting and views",
+            "• Use high-performance glazing with low solar heat gain coefficient (SHGC) in high solar radiation areas",
+            "• Consider automated shading systems for dynamic climate response throughout the year"
+        ]
+
+        for rec in recommendations:
+            p = tf.add_paragraph()
+            p.text = rec
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.0
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+
+        # Design Considerations
+        p = tf.add_paragraph()
+        p.text = "Design Considerations"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(6)
+        p.space_after = Pt(3)
+
+        considerations = [
+            "• Optimal window-to-wall ratio: 30-40% for climate comfort; balance daylighting with thermal performance",
+            "• Depth of shading device: D/H ratio (depth to height) between 0.5-1.0 for effective summer shading",
+            "• Material selection: High-albedo surfaces reflect solar radiation; low-emissivity coatings minimize thermal transmission"
+        ]
+
+        for cons in considerations:
+            p = tf.add_paragraph()
+            p.text = cons
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.0
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+
+        _add_logo(slide)
+
+    _make_shading_summary_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
     # ANNEXURE SLIDE – About EDS, Disclaimer, Acknowledgement
     # ═══════════════════════════════════════════════════════════════════════════
     def _make_annexure_slide():
@@ -852,14 +1004,14 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         # About EDS
         p = tf.paragraphs[0]
         p.text = "About EDS"
-        p.font.size = Pt(12)
+        p.font.size = Pt(14)
         p.font.bold = True
         p.font.color.rgb = TITLE_RED
         p.space_after = Pt(6)
 
         p = tf.add_paragraph()
         p.text = "Environmental Design Solutions [EDS] is a sustainability advisory firm. Since 2002, EDS has worked on over 500 green building and energy efficiency projects worldwide. The team focuses on climate change mitigation, low-carbon design, building simulation, performance audits, and capacity building. EDS continues to contribute to the buildings community with useful tools through its IT services."
-        p.font.size = Pt(10)
+        p.font.size = Pt(11)
         p.font.color.rgb = DARK_GREY
         p.line_spacing = 1.2
         p.space_after = Pt(8)
@@ -868,7 +1020,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         # Disclaimer
         p = tf.add_paragraph()
         p.text = "Disclaimer"
-        p.font.size = Pt(12)
+        p.font.size = Pt(14)
         p.font.bold = True
         p.font.color.rgb = TITLE_RED
         p.space_before = Pt(4)
@@ -885,7 +1037,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         for item in disclaimer_items:
             p = tf.add_paragraph()
             p.text = item
-            p.font.size = Pt(10)
+            p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.line_spacing = 1.1
             p.space_before = Pt(0)
@@ -895,7 +1047,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         # Acknowledgement
         p = tf.add_paragraph()
         p.text = "Acknowledgement"
-        p.font.size = Pt(12)
+        p.font.size = Pt(14)
         p.font.bold = True
         p.font.color.rgb = TITLE_RED
         p.space_before = Pt(6)
@@ -910,7 +1062,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         for item in ack_items:
             p = tf.add_paragraph()
             p.text = item
-            p.font.size = Pt(10)
+            p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.line_spacing = 1.1
             p.space_before = Pt(0)
@@ -1029,8 +1181,9 @@ def generate_shading_pptx_report(
         tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.75), Inches(SW - 1.2), Inches(0.65))
         p2 = tb2.text_frame.paragraphs[0]
         run2 = p2.add_run()
+        _city = metadata.get("city", "") if metadata else ""
         run2.text = (
-            f"Location: {_lat:.3f}\u00b0 N, {_lon:.3f}\u00b0 E   |  "
+            f"Location: {_city}   |  "
             f"Temp threshold: {temp_threshold}\u00b0C   |  "
             f"Radiation threshold: {rad_threshold} W/m\u00b2   |  "
             f"Design cutoff angle: {design_cutoff_angle}\u00b0"
@@ -1457,14 +1610,14 @@ def generate_shading_pptx_report(
         # About EDS
         p = tf.paragraphs[0]
         p.text = "About EDS"
-        p.font.size = Pt(12)
+        p.font.size = Pt(14)
         p.font.bold = True
         p.font.color.rgb = TITLE_RED
         p.space_after = Pt(6)
 
         p = tf.add_paragraph()
         p.text = "Environmental Design Solutions [EDS] is a sustainability advisory firm. Since 2002, EDS has worked on over 500 green building and energy efficiency projects worldwide. The team focuses on climate change mitigation, low-carbon design, building simulation, performance audits, and capacity building. EDS continues to contribute to the buildings community with useful tools through its IT services."
-        p.font.size = Pt(10)
+        p.font.size = Pt(14)
         p.font.color.rgb = DARK_GREY
         p.line_spacing = 1.2
         p.space_after = Pt(8)
@@ -1490,7 +1643,7 @@ def generate_shading_pptx_report(
         for item in disclaimer_items:
             p = tf.add_paragraph()
             p.text = item
-            p.font.size = Pt(10)
+            p.font.size = Pt(14)
             p.font.color.rgb = DARK_GREY
             p.line_spacing = 1.1
             p.space_before = Pt(0)
@@ -1500,7 +1653,7 @@ def generate_shading_pptx_report(
         # Acknowledgement
         p = tf.add_paragraph()
         p.text = "Acknowledgement"
-        p.font.size = Pt(12)
+        p.font.size = Pt(14)
         p.font.bold = True
         p.font.color.rgb = TITLE_RED
         p.space_before = Pt(6)
@@ -1515,7 +1668,7 @@ def generate_shading_pptx_report(
         for item in ack_items:
             p = tf.add_paragraph()
             p.text = item
-            p.font.size = Pt(10)
+            p.font.size = Pt(14)
             p.font.color.rgb = DARK_GREY
             p.line_spacing = 1.1
             p.space_before = Pt(0)
@@ -1565,12 +1718,15 @@ def parse_epw(epw_text: str) -> tuple:
     # split into lines and find first data row (starts with a year integer)
     lines = [ln.strip() for ln in epw_text.splitlines() if ln.strip() != ""]
     # Extract metadata from header (first line)
-    metadata = {"latitude": None, "longitude": None, "timezone": "UTC"}
+    metadata = {"latitude": None, "longitude": None, "timezone": "UTC", "city": None, "location": None}
     if len(lines) > 0:
         header = lines[0].split(",")
         try:
             # EPW header format: LOCATION,CITY,STATE,COUNTRY,DATA SOURCE,WMO STATION #,LATITUDE,LONGITUDE,TIMEZONE,ELEVATION
             # Column indices:      0        1     2     3       4           5              6         7          8        9
+            if len(header) >= 2:
+                metadata["location"] = header[0].strip()
+                metadata["city"] = header[1].strip()
             if len(header) >= 8:
                 metadata["latitude"] = float(header[6].strip())
                 metadata["longitude"] = float(header[7].strip())
