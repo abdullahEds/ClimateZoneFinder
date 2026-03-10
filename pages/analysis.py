@@ -808,27 +808,27 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
                 run.font.bold = bold
                 run.font.color.rgb = color or DARK_GREY
 
-            _ann(slide, "Location", 0.75, size=8, bold=True, color=TITLE_RED)
-            _ann(slide, f"Latitude:   {lat:.3f}\u00b0", 1.05, size=8)
-            _ann(slide, f"Longitude: {lon:.3f}\u00b0", 1.36, size=8)
+            # _ann(slide, "Location", 0.75, size=8, bold=True, color=TITLE_RED)
+            # _ann(slide, f"Latitude:   {lat:.3f}\u00b0", 1.05, size=8)
+            # _ann(slide, f"Longitude: {lon:.3f}\u00b0", 1.36, size=8)
 
-            _ann(slide, "Key Dates", 1.80, size=8, bold=True, color=TITLE_RED)
-            _ann(slide, "\u25a0  Mar 21 – Spring Equinox", 2.10, size=8)
-            _ann(slide, "\u25a0  Jun 21 – Summer Solstice", 2.40, size=8)
-            _ann(slide, "\u25a0  Dec 21 – Winter Solstice", 2.70, size=8)
+            # _ann(slide, "Key Dates", 1.80, size=8, bold=True, color=TITLE_RED)
+            # _ann(slide, "\u25a0  Mar 21 – Spring Equinox", 2.10, size=8)
+            # _ann(slide, "\u25a0  Jun 21 – Summer Solstice", 2.40, size=8)
+            # _ann(slide, "\u25a0  Dec 21 – Winter Solstice", 2.70, size=8)
 
             # Summer / Winter altitude stats
-            summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz)
-            ssum = _solpos_lib.get_solarposition(summer_dt, lat, lon)
-            noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
+            # summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz)
+            # ssum = _solpos_lib.get_solarposition(summer_dt, lat, lon)
+            # noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
 
-            winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz)
-            swin = _solpos_lib.get_solarposition(winter_dt, lat, lon)
-            noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
+            # winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz)
+            # swin = _solpos_lib.get_solarposition(winter_dt, lat, lon)
+            # noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
 
-            _ann(slide, "Noon Altitudes", 3.15, size=8, bold=True, color=TITLE_RED)
-            _ann(slide, f"Summer Solstice: {noon_alt_sum:.1f}\u00b0", 3.45, size=8)
-            _ann(slide, f"Winter Solstice: {noon_alt_win:.1f}\u00b0", 3.75, size=8)
+            # _ann(slide, "Noon Altitudes", 3.15, size=8, bold=True, color=TITLE_RED)
+            # _ann(slide, f"Summer Solstice: {noon_alt_sum:.1f}\u00b0", 3.45, size=8)
+            # _ann(slide, f"Winter Solstice: {noon_alt_win:.1f}\u00b0", 3.75, size=8)
 
         except Exception as e:
             _err_box(slide, e)
@@ -840,12 +840,125 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
     # ═══════════════════════════════════════════════════════════════════════════
     # SHADING ANALYSIS SLIDE
     # ═══════════════════════════════════════════════════════════════════════════
+    
+    def _plot_sun_path_shading(lat, lon, tz_str):
+        """Generate a sun path diagram with horizontal overhang shading profile."""
+        try:
+            from pvlib import solarposition as _sp
+            import pytz as _pz
+            
+            try:
+                _tz = _pz.timezone(tz_str)
+            except:
+                _tz = _pz.UTC
+            
+            # Generate hourly data for full year
+            times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left")
+            sol = _sp.get_solarposition(times, lat, lon)
+            sol = sol[sol["apparent_elevation"] > 0].copy()
+            sol["r"] = 90 - sol["apparent_elevation"]
+            
+            # Create polar plot
+            fig = plt.figure(figsize=(8.0, 7.0), dpi=130, facecolor='white')
+            ax = fig.add_subplot(111, projection='polar')
+            ax.set_theta_zero_location('N')
+            ax.set_theta_direction(-1)
+            ax.set_ylim(0, 90)
+            ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
+            ax.set_yticklabels(['90°', '75°', '60°', '45°', '30°', '15°', '0°'], fontsize=7, color='#555')
+            ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
+            ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=9, fontweight='bold')
+            ax.set_facecolor('#F0F4F8')
+            ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
+            
+            # Plot sun positions colored by season
+            sc = ax.scatter(
+                np.radians(sol["azimuth"].values),
+                sol["r"].values,
+                c=sol.index.dayofyear,
+                cmap='YlOrRd',
+                s=0.8,
+                alpha=0.6,
+                vmin=1, vmax=365,
+                linewidths=0,
+                zorder=2,
+            )
+            cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.7)
+            cbar.set_label('Day of Year', fontsize=8)
+            cbar.set_ticks([1, 91, 182, 273, 365])
+            cbar.set_ticklabels(['Jan', 'Apr', 'Jul', 'Oct', 'Dec'], fontsize=7)
+            
+            # Plot key date arcs
+            key_dates = [
+                ("Equinox", "2020-03-21", "#FF9500", 1.5),
+                ("Summer", "2020-06-21", "#CC0000", 1.8),
+                ("Winter", "2020-12-21", "#0066CC", 1.8),
+            ]
+            for lbl, dstr, col, lw in key_dates:
+                dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
+                ks = _sp.get_solarposition(dt, lat, lon)
+                ks = ks[ks["apparent_elevation"] > 0]
+                if not ks.empty:
+                    ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
+                            color=col, linewidth=lw, label=lbl, zorder=4)
+            
+            # Add shading profile (horizontal overhang with D/H ratio ~0.8)
+            # This represents an overhang that blocks summer sun but allows winter sun
+            overhang_altitude = 35  # degrees - typical overhang cutoff
+            theta_range = np.radians(np.linspace(45, 315, 100))  # South-facing (SE to SW)
+            shading_altitude = np.ones_like(theta_range) * overhang_altitude
+            
+            ax.fill_between(theta_range, shading_altitude, 90, alpha=0.12, color='#8B4513', 
+                            label='Shading Zone', zorder=1)
+            ax.plot(theta_range, shading_altitude, color='#654321', linewidth=2.5, 
+                   label='Overhang Profile', linestyle='--', zorder=3)
+            
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), ncol=4,
+                     frameon=True, fontsize=7, borderaxespad=0)
+            ax.set_title(f'Sun Path with Shading Profile\nLat: {lat:.2f}°  Lon: {lon:.2f}°',
+                        fontsize=10, fontweight='bold', color='#333', pad=12)
+            
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Shading diagram error: {e}")
+            return None
+    
     def _make_shading_summary_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _add_slide_title(slide, "Shading Strategy")
         _add_divider(slide, 0.62)
 
-        tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        # Try to add sun path shading diagram
+        diagram_added = False
+        _meta = metadata or {}
+        _lat = _meta.get("latitude")
+        _lon = _meta.get("longitude")
+        _tz_str = _meta.get("timezone", "UTC")
+        
+        if _lat is not None and _lon is not None:
+            try:
+                shading_fig = _plot_sun_path_shading(_lat, _lon, _tz_str)
+                if shading_fig is not None:
+                    tmp_shading = _save_mpl_figure(shading_fig)
+                    plt.close(shading_fig)
+                    # Position diagram on left side of slide
+                    slide.shapes.add_picture(tmp_shading, Inches(0.27), Inches(0.75), 
+                                           width=Inches(3.5), height=Inches(5.0))
+                    os.unlink(tmp_shading)
+                    diagram_added = True
+            except Exception as e:
+                print(f"Shading diagram error: {e}")
+        
+        # Add text content (right side if diagram added, otherwise full width)
+        if diagram_added:
+            text_left = 3.9
+            text_width = SW - text_left - 0.27
+            tb = slide.shapes.add_textbox(Inches(text_left), Inches(0.80), 
+                                          Inches(text_width), Inches(5.8))
+        else:
+            tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        
         tf = tb.text_frame
         tf.word_wrap = True
 
@@ -1184,9 +1297,9 @@ def generate_shading_pptx_report(
         _city = metadata.get("city", "") if metadata else ""
         run2.text = (
             f"Location: {_city}   |  "
-            f"Temp threshold: {temp_threshold}\u00b0C   |  "
-            f"Radiation threshold: {rad_threshold} W/m\u00b2   |  "
-            f"Design cutoff angle: {design_cutoff_angle}\u00b0"
+            # f"Temp threshold: {temp_threshold}\u00b0C   |  "
+            # f"Radiation threshold: {rad_threshold} W/m\u00b2   |  "
+            # f"Design cutoff angle: {design_cutoff_angle}\u00b0"
         )
         run2.font.size = Pt(13)
         run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
@@ -1372,18 +1485,18 @@ def generate_shading_pptx_report(
                 run.font.bold = bold
                 run.font.color.rgb = color or DARK_GREY
 
-            _ann("Location", 0.75, bold=True, color=TITLE_RED)
-            _ann(f"Lat: {_lat:.3f}\u00b0", 1.08)
-            _ann(f"Lon: {_lon:.3f}\u00b0", 1.38)
-            _ann("Thresholds", 1.78, bold=True, color=TITLE_RED)
-            _ann(f"Temp > {temp_threshold}\u00b0C", 2.10)
-            _ann(f"GHI > {rad_threshold} W/m\u00b2", 2.40)
-            n_sh = int(mask_sh.sum())
-            n_total = len(mask_sh)
-            _ann("Shading Stats", 2.80, bold=True, color=TITLE_RED)
-            _ann(f"Total daytime pts: {n_total}", 3.12)
-            _ann(f"Shading required: {n_sh}", 3.42)
-            _ann(f"({shading_pct:.1f}% of daytime)", 3.72)
+            # _ann("Location", 0.75, bold=True, color=TITLE_RED)
+            # _ann(f"Lat: {_lat:.3f}\u00b0", 1.08)
+            # _ann(f"Lon: {_lon:.3f}\u00b0", 1.38)
+            # _ann("Thresholds", 1.78, bold=True, color=TITLE_RED)
+            # _ann(f"Temp > {temp_threshold}\u00b0C", 2.10)
+            # _ann(f"GHI > {rad_threshold} W/m\u00b2", 2.40)
+            # n_sh = int(mask_sh.sum())
+            # n_total = len(mask_sh)
+            # _ann("Shading Stats", 2.80, bold=True, color=TITLE_RED)
+            # _ann(f"Total daytime pts: {n_total}", 3.12)
+            # _ann(f"Shading required: {n_sh}", 3.42)
+            # _ann(f"({shading_pct:.1f}% of daytime)", 3.72)
 
         except Exception as e:
             _err(slide, e)
