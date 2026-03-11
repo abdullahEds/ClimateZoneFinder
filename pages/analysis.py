@@ -2761,7 +2761,7 @@ with col_left:
     
     # Parameter Selection
     # st.markdown('<div class="control-section-header">⚙️ Parameter</div>', unsafe_allow_html=True)
-    st.write("##### ⚙️ Parameter")
+    st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
         ["Temperature", "Humidity", "Sun Path"],
@@ -2827,12 +2827,12 @@ try:
             _lat_default = float(metadata.get("latitude") or 0.0)
             _lon_default = float(metadata.get("longitude") or 0.0)
             shading_lat = st.number_input(
-                "Latitude", value=_lat_default, step=0.1, key="shading_lat",
+                "Latitude (°)", value=_lat_default, step=0.1, key="shading_lat",
                 help="Auto-read from EPW metadata",
                 width=300
             )
             shading_lon = st.number_input(
-                "Longitude", value=_lon_default, step=0.1, key="shading_lon",
+                "Longitude (°)", value=_lon_default, step=0.1, key="shading_lon",
                 help="Auto-read from EPW metadata",
                 width=300
             )
