@@ -22,7 +22,7 @@ from modules.epw_parser import parse_epw
 from modules.ppt_report import generate_pptx_report, generate_shading_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
-from modules import dbt_module, humidity_module
+from modules import dbt_module, humidity_module, wind_module
 
 # ─── Page configuration ───────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ with col_left:
     st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
-        ["Temperature", "Humidity", "Sun Path"],
+        ["Temperature", "Humidity", "Sun Path", "Wind"],
         label_visibility="collapsed",
         key="parameter_selector",
         width=300,
@@ -202,6 +202,29 @@ try:
                 min_value=5.0, max_value=89.0, key="design_cutoff_angle",
                 help="Solar altitude cutoff used to assess shading device protection",
                 width=300,
+            )
+        elif selected_parameter == "Wind":
+            hour_range = (0, 23)
+
+            st.markdown('<div class="control-section-header">🧭 Direction Sectors</div>', unsafe_allow_html=True)
+            st.select_slider(
+                "Sectors",
+                options=[4, 8, 12, 16, 24, 32, 36],
+                value=16,
+                key="wind_n_sectors",
+                label_visibility="collapsed",
+                help="Number of compass sectors in the wind rose (8 or 16 recommended)",
+            )
+
+            st.markdown('<div class="control-section-header">⚙️ Wind Options</div>', unsafe_allow_html=True)
+            st.toggle(
+                "Renormalise by non-calm hours",
+                value=False,
+                key="wind_exclude_calm",
+                help=(
+                    "Off: bar frequencies = % of total hours. "
+                    "On: % of non-calm hours only."
+                ),
             )
         else:
             st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
@@ -333,6 +356,19 @@ with col_right:
 
     if selected_parameter == "Sun Path":
         render_sun_path_section(df, metadata)
+
+    elif selected_parameter == "Wind":
+        _s = st.session_state.start_month_idx + 1
+        _e = st.session_state.end_month_idx + 1
+        _wind_months    = list(range(_s, _e + 1))
+        _wind_n_sectors = st.session_state.get("wind_n_sectors", 16)
+        _wind_excl_calm = st.session_state.get("wind_exclude_calm", False)
+        wind_module.render_wind_analysis(
+            df,
+            months       = _wind_months,
+            n_sectors    = _wind_n_sectors,
+            exclude_calm = _wind_excl_calm,
+        )
 
     else:
         # Tab navigation buttons

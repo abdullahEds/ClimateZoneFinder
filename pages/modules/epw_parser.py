@@ -89,6 +89,10 @@ def parse_epw(epw_text: str) -> tuple:
         "relative_humidity": 8,
         "direct_normal_irradiance": 14,
         "diffuse_horizontal_irradiance": 15,
+        # EPW field 20 = wind direction (degrees from North, clockwise)
+        # EPW field 21 = wind speed (m/s)
+        "wind_direction": 20,
+        "wind_speed": 21,
     }
 
     max_needed = max(col_map.values())
@@ -120,6 +124,12 @@ def parse_epw(epw_text: str) -> tuple:
     df["global_horizontal_irradiance"] = pd.to_numeric(
         df_raw.iloc[:, 13], errors="coerce"
     ).fillna(0)
+    df["wind_direction"] = pd.to_numeric(
+        df_raw.iloc[:, col_map["wind_direction"]], errors="coerce"
+    ).fillna(0.0)
+    df["wind_speed"] = pd.to_numeric(
+        df_raw.iloc[:, col_map["wind_speed"]], errors="coerce"
+    ).fillna(0.0)
 
     df["datetime"] = pd.to_datetime(
         dict(
@@ -141,6 +151,8 @@ def parse_epw(epw_text: str) -> tuple:
             "direct_normal_irradiance",
             "diffuse_horizontal_irradiance",
             "global_horizontal_irradiance",
+            "wind_direction",
+            "wind_speed",
             "hour",
         ]],
         metadata,
