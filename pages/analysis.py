@@ -419,15 +419,15 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         run.font.bold = True
         run.font.color.rgb = WHITE
 
-        # Subtitle
+        # Subtitle - City/Location name
         tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.85), Inches(SW - 1.2), Inches(0.7))
         tf2 = tb2.text_frame
         p2 = tf2.paragraphs[0]
         run2 = p2.add_run()
-        run2.text = (
-            f"Period: {start_date.strftime('%B %d')} \u2013 {end_date.strftime('%B %d, %Y')}  "
-            f"|  Hours: {start_hour:02d}:00 \u2013 {end_hour:02d}:00"
-        )
+        _city = metadata.get("city", "") if metadata else ""
+        _location = metadata.get("location", "") if metadata else ""
+        location_display = _city if _city else (_location if _location else "Location")
+        run2.text = f"{location_display}"
         run2.font.size = Pt(16)
         run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
 
@@ -532,7 +532,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
             ax.set_xticks(x)
             ax.set_xticklabels(months_lbl, fontsize=10)
             ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
-            ax.set_title('Monthly Temperature Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.set_title('Monthly Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
             ax.grid(True, alpha=0.25, linestyle='--', axis='y')
             ax.set_facecolor('#fafafa')
@@ -660,7 +660,7 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
             ax.set_xticklabels(months_lbl, fontsize=10)
             ax.set_ylabel('Relative Humidity (%)', fontsize=11, fontweight='bold')
             ax.set_ylim(0, 110)
-            ax.set_title('Monthly Relative Humidity Statistics', fontsize=13, fontweight='bold', pad=10, color='#333')
+            ax.set_title('Monthly Relative Humidity Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
             ax.grid(True, alpha=0.25, linestyle='--', axis='y')
             ax.set_facecolor('#fafafa')
@@ -808,27 +808,27 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
                 run.font.bold = bold
                 run.font.color.rgb = color or DARK_GREY
 
-            _ann(slide, "Location", 0.75, size=8, bold=True, color=TITLE_RED)
-            _ann(slide, f"Latitude:   {lat:.3f}\u00b0", 1.05, size=8)
-            _ann(slide, f"Longitude: {lon:.3f}\u00b0", 1.36, size=8)
+            # _ann(slide, "Location", 0.75, size=8, bold=True, color=TITLE_RED)
+            # _ann(slide, f"Latitude:   {lat:.3f}\u00b0", 1.05, size=8)
+            # _ann(slide, f"Longitude: {lon:.3f}\u00b0", 1.36, size=8)
 
-            _ann(slide, "Key Dates", 1.80, size=8, bold=True, color=TITLE_RED)
-            _ann(slide, "\u25a0  Mar 21 – Spring Equinox", 2.10, size=8)
-            _ann(slide, "\u25a0  Jun 21 – Summer Solstice", 2.40, size=8)
-            _ann(slide, "\u25a0  Dec 21 – Winter Solstice", 2.70, size=8)
+            # _ann(slide, "Key Dates", 1.80, size=8, bold=True, color=TITLE_RED)
+            # _ann(slide, "\u25a0  Mar 21 – Spring Equinox", 2.10, size=8)
+            # _ann(slide, "\u25a0  Jun 21 – Summer Solstice", 2.40, size=8)
+            # _ann(slide, "\u25a0  Dec 21 – Winter Solstice", 2.70, size=8)
 
             # Summer / Winter altitude stats
-            summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz)
-            ssum = _solpos_lib.get_solarposition(summer_dt, lat, lon)
-            noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
+            # summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz)
+            # ssum = _solpos_lib.get_solarposition(summer_dt, lat, lon)
+            # noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
 
-            winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz)
-            swin = _solpos_lib.get_solarposition(winter_dt, lat, lon)
-            noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
+            # winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz)
+            # swin = _solpos_lib.get_solarposition(winter_dt, lat, lon)
+            # noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
 
-            _ann(slide, "Noon Altitudes", 3.15, size=8, bold=True, color=TITLE_RED)
-            _ann(slide, f"Summer Solstice: {noon_alt_sum:.1f}\u00b0", 3.45, size=8)
-            _ann(slide, f"Winter Solstice: {noon_alt_win:.1f}\u00b0", 3.75, size=8)
+            # _ann(slide, "Noon Altitudes", 3.15, size=8, bold=True, color=TITLE_RED)
+            # _ann(slide, f"Summer Solstice: {noon_alt_sum:.1f}\u00b0", 3.45, size=8)
+            # _ann(slide, f"Winter Solstice: {noon_alt_win:.1f}\u00b0", 3.75, size=8)
 
         except Exception as e:
             _err_box(slide, e)
@@ -836,6 +836,355 @@ def generate_pptx_report(df: pd.DataFrame, start_date, end_date, start_hour: int
         _add_logo(slide)
 
     _make_sun_path_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SHADING ANALYSIS SLIDE
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def _plot_sun_path_shading(lat, lon, tz_str):
+        """Generate a sun path diagram with horizontal overhang shading profile."""
+        try:
+            from pvlib import solarposition as _sp
+            import pytz as _pz
+            
+            try:
+                _tz = _pz.timezone(tz_str)
+            except:
+                _tz = _pz.UTC
+            
+            # Generate hourly data for full year
+            times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left")
+            sol = _sp.get_solarposition(times, lat, lon)
+            sol = sol[sol["apparent_elevation"] > 0].copy()
+            sol["r"] = 90 - sol["apparent_elevation"]
+            
+            # Create polar plot
+            fig = plt.figure(figsize=(8.0, 7.0), dpi=130, facecolor='white')
+            ax = fig.add_subplot(111, projection='polar')
+            ax.set_theta_zero_location('N')
+            ax.set_theta_direction(-1)
+            ax.set_ylim(0, 90)
+            ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
+            ax.set_yticklabels(['90°', '75°', '60°', '45°', '30°', '15°', '0°'], fontsize=7, color='#555')
+            ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
+            ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=9, fontweight='bold')
+            ax.set_facecolor('#F0F4F8')
+            ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
+            
+            # Plot sun positions colored by season
+            sc = ax.scatter(
+                np.radians(sol["azimuth"].values),
+                sol["r"].values,
+                c=sol.index.dayofyear,
+                cmap='YlOrRd',
+                s=0.8,
+                alpha=0.6,
+                vmin=1, vmax=365,
+                linewidths=0,
+                zorder=2,
+            )
+            cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.7)
+            cbar.set_label('Day of Year', fontsize=8)
+            cbar.set_ticks([1, 91, 182, 273, 365])
+            cbar.set_ticklabels(['Jan', 'Apr', 'Jul', 'Oct', 'Dec'], fontsize=7)
+            
+            # Plot key date arcs
+            key_dates = [
+                ("Equinox", "2020-03-21", "#FF9500", 1.5),
+                ("Summer", "2020-06-21", "#CC0000", 1.8),
+                ("Winter", "2020-12-21", "#0066CC", 1.8),
+            ]
+            for lbl, dstr, col, lw in key_dates:
+                dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
+                ks = _sp.get_solarposition(dt, lat, lon)
+                ks = ks[ks["apparent_elevation"] > 0]
+                if not ks.empty:
+                    ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
+                            color=col, linewidth=lw, label=lbl, zorder=4)
+            
+            # Add shading profile (horizontal overhang with D/H ratio ~0.8)
+            # This represents an overhang that blocks summer sun but allows winter sun
+            overhang_altitude = 35  # degrees - typical overhang cutoff
+            theta_range = np.radians(np.linspace(45, 315, 100))  # South-facing (SE to SW)
+            shading_altitude = np.ones_like(theta_range) * overhang_altitude
+            
+            ax.fill_between(theta_range, shading_altitude, 90, alpha=0.12, color='#8B4513', 
+                            label='Shading Zone', zorder=1)
+            ax.plot(theta_range, shading_altitude, color='#654321', linewidth=2.5, 
+                   label='Overhang Profile', linestyle='--', zorder=3)
+            
+            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), ncol=4,
+                     frameon=True, fontsize=7, borderaxespad=0)
+            ax.set_title(f'Sun Path with Shading Profile\nLat: {lat:.2f}°  Lon: {lon:.2f}°',
+                        fontsize=10, fontweight='bold', color='#333', pad=12)
+            
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Shading diagram error: {e}")
+            return None
+    
+    def _make_shading_summary_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Shading Strategy")
+        _add_divider(slide, 0.62)
+
+        # Try to add sun path shading diagram
+        diagram_added = False
+        _meta = metadata or {}
+        _lat = _meta.get("latitude")
+        _lon = _meta.get("longitude")
+        _tz_str = _meta.get("timezone", "UTC")
+        
+        if _lat is not None and _lon is not None:
+            try:
+                shading_fig = _plot_sun_path_shading(_lat, _lon, _tz_str)
+                if shading_fig is not None:
+                    tmp_shading = _save_mpl_figure(shading_fig)
+                    plt.close(shading_fig)
+                    # Position diagram on left side of slide
+                    slide.shapes.add_picture(tmp_shading, Inches(0.27), Inches(0.75), 
+                                           width=Inches(3.5), height=Inches(5.0))
+                    os.unlink(tmp_shading)
+                    diagram_added = True
+            except Exception as e:
+                print(f"Shading diagram error: {e}")
+        
+        # Add text content (right side if diagram added, otherwise full width)
+        if diagram_added:
+            text_left = 3.9
+            text_width = SW - text_left - 0.27
+            tb = slide.shapes.add_textbox(Inches(text_left), Inches(0.80), 
+                                          Inches(text_width), Inches(5.8))
+        else:
+            tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        
+        tf = tb.text_frame
+        tf.word_wrap = True
+
+        # Solar Geometry & Shading Analysis
+        p = tf.paragraphs[0]
+        p.text = "Solar Geometry & Shading Analysis"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_after = Pt(4)
+
+        try:
+            # Extract metadata for location
+            _meta = metadata or {}
+            _lat = _meta.get("latitude")
+            _lon = _meta.get("longitude")
+            _tz_str = _meta.get("timezone", "UTC")
+            
+            if _lat is None or _lon is None:
+                raise ValueError("Latitude/Longitude not available")
+            
+            from pvlib import solarposition as _solpos_lib_shade
+            import pytz as _pytz_shade
+            
+            try:
+                _tz_obj = _pytz_shade.timezone(_tz_str)
+            except Exception:
+                _tz_obj = _pytz_shade.UTC
+            
+            # Calculate solar angles for Key dates
+            summer_dt = pd.date_range("2020-06-21", periods=24, freq="h", tz=_tz_obj)
+            ssum = _solpos_lib_shade.get_solarposition(summer_dt, _lat, _lon)
+            noon_alt_sum = float(ssum.iloc[12]["apparent_elevation"])
+            
+            winter_dt = pd.date_range("2020-12-21", periods=24, freq="h", tz=_tz_obj)
+            swin = _solpos_lib_shade.get_solarposition(winter_dt, _lat, _lon)
+            noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
+            
+            p = tf.add_paragraph()
+            p.text = f"• Summer Solstice (Jun 21): Solar altitude at noon = {noon_alt_sum:.1f}°"
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(3)
+            
+            p = tf.add_paragraph()
+            p.text = f"• Winter Solstice (Dec 21): Solar altitude at noon = {noon_alt_win:.1f}°"
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(3)
+            
+            # Calculate shading metrics from filtered data
+            ghi_col = filtered_df.get("global_horizontal_irradiance", pd.Series(0))
+            if len(ghi_col) == 0:
+                ghi_col = pd.Series(0, index=filtered_df.index)
+            ghi_col = ghi_col.fillna(0)
+            
+            temp_col = filtered_df.get("dry_bulb_temperature", pd.Series(20))
+            if len(temp_col) == 0:
+                temp_col = pd.Series(20, index=filtered_df.index)
+            temp_col = temp_col.fillna(20)
+            
+            # Shading thresholds: temp > 28°C AND GHI > 315 Wh/m²
+            shading_needed = (temp_col > 28) & (ghi_col > 315)
+            shading_hours = shading_needed.sum() / 2  # Each row is 30 minutes
+            total_observation_hours = len(filtered_df) / 2
+            
+            if total_observation_hours > 0:
+                shading_pct = (shading_hours / total_observation_hours) * 100
+            else:
+                shading_pct = 0
+            
+            p = tf.add_paragraph()
+            p.text = f"• Shading required: {shading_hours:.0f} hours ({shading_pct:.1f}% of period)"
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(6)
+        except Exception as e:
+            p = tf.add_paragraph()
+            p.text = "• Solar altitude and shading data not available"
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.space_after = Pt(6)
+
+        # Shading Recommendations
+        p = tf.add_paragraph()
+        p.text = "Shading Recommendations"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(4)
+        p.space_after = Pt(4)
+
+        recommendations = [
+            "• South-facing facades: Use horizontal overhangs (louvers) or shading devices to block summer sun while allowing winter sunlight penetration",
+            "• East/West facades: Use vertical fins or combination of overhangs and fins to minimize morning/afternoon heat gain",
+            "• North-facing facades: Minimal shading required; prioritize daylighting and views",
+            "• Use high-performance glazing with low solar heat gain coefficient (SHGC) in high solar radiation areas",
+            "• Consider automated shading systems for dynamic climate response throughout the year"
+        ]
+
+        for rec in recommendations:
+            p = tf.add_paragraph()
+            p.text = rec
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.0
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+
+        # Design Considerations
+        p = tf.add_paragraph()
+        p.text = "Design Considerations"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(6)
+        p.space_after = Pt(3)
+
+        considerations = [
+            "• Optimal window-to-wall ratio: 30-40% for climate comfort; balance daylighting with thermal performance",
+            "• Depth of shading device: D/H ratio (depth to height) between 0.5-1.0 for effective summer shading",
+            "• Material selection: High-albedo surfaces reflect solar radiation; low-emissivity coatings minimize thermal transmission"
+        ]
+
+        for cons in considerations:
+            p = tf.add_paragraph()
+            p.text = cons
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.0
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+
+        _add_logo(slide)
+
+    _make_shading_summary_slide()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ANNEXURE SLIDE – About EDS, Disclaimer, Acknowledgement
+    # ═══════════════════════════════════════════════════════════════════════════
+    def _make_annexure_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _add_slide_title(slide, "Annexure")
+        _add_divider(slide, 0.62)
+
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        tf = tb.text_frame
+        tf.word_wrap = True
+
+        # About EDS
+        p = tf.paragraphs[0]
+        p.text = "About EDS"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_after = Pt(6)
+
+        p = tf.add_paragraph()
+        p.text = "Environmental Design Solutions [EDS] is a sustainability advisory firm. Since 2002, EDS has worked on over 500 green building and energy efficiency projects worldwide. The team focuses on climate change mitigation, low-carbon design, building simulation, performance audits, and capacity building. EDS continues to contribute to the buildings community with useful tools through its IT services."
+        p.font.size = Pt(11)
+        p.font.color.rgb = DARK_GREY
+        p.line_spacing = 1.2
+        p.space_after = Pt(8)
+        p.level = 0
+
+        # Disclaimer
+        p = tf.add_paragraph()
+        p.text = "Disclaimer"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(4)
+        p.space_after = Pt(4)
+
+        disclaimer_items = [
+            "Climate Zone Analyser is an outcome of the best efforts of building simulation experts at EDS.",
+            "\u2022  EDS does not assume responsibility for outcomes from its use. By using this Application, the User indemnifies EDS against any damages.",
+            "\u2022  EDS does not guarantee uninterrupted availability. By using this Application, the User agrees to share uploaded information with EDS for analysis and research purposes.",
+            "\u2022  Open-source resources used: Clima - Berkley, Streamlit, Python",
+            "\u2022  EDS is not liable to inform Users about updates to the Application or underlying resources"
+        ]
+
+        for item in disclaimer_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        # Acknowledgement
+        p = tf.add_paragraph()
+        p.text = "Acknowledgement"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(6)
+        p.space_after = Pt(4)
+
+        ack_items = [
+            "\u2022  Betti, G., et al. CBE Clima Tool Build. Simul. (2023). https://doi.org/10.1007/s12273-023-1090-5",
+            "\u2022  Streamlit, \u00a9 Streamlit Inc., licensed under Apache 2.0",
+            "\u2022  Python \u00a9 Python Software Foundation, licensed under PSF License Version 2"
+        ]
+
+        for item in ack_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(11)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        _add_logo(slide)
+
+    _make_annexure_slide()
 
     # ── Save ───────────────────────────────────────────────────────────────────
     report_bytes = io.BytesIO()
@@ -945,11 +1294,12 @@ def generate_shading_pptx_report(
         tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.75), Inches(SW - 1.2), Inches(0.65))
         p2 = tb2.text_frame.paragraphs[0]
         run2 = p2.add_run()
+        _city = metadata.get("city", "") if metadata else ""
         run2.text = (
-            f"Location: {_lat:.3f}\u00b0 N, {_lon:.3f}\u00b0 E   |  "
-            f"Temp threshold: {temp_threshold}\u00b0C   |  "
-            f"Radiation threshold: {rad_threshold} W/m\u00b2   |  "
-            f"Design cutoff angle: {design_cutoff_angle}\u00b0"
+            f"Location: {_city}   |  "
+            # f"Temp threshold: {temp_threshold}\u00b0C   |  "
+            # f"Radiation threshold: {rad_threshold} W/m\u00b2   |  "
+            # f"Design cutoff angle: {design_cutoff_angle}\u00b0"
         )
         run2.font.size = Pt(13)
         run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
@@ -1135,18 +1485,18 @@ def generate_shading_pptx_report(
                 run.font.bold = bold
                 run.font.color.rgb = color or DARK_GREY
 
-            _ann("Location", 0.75, bold=True, color=TITLE_RED)
-            _ann(f"Lat: {_lat:.3f}\u00b0", 1.08)
-            _ann(f"Lon: {_lon:.3f}\u00b0", 1.38)
-            _ann("Thresholds", 1.78, bold=True, color=TITLE_RED)
-            _ann(f"Temp > {temp_threshold}\u00b0C", 2.10)
-            _ann(f"GHI > {rad_threshold} W/m\u00b2", 2.40)
-            n_sh = int(mask_sh.sum())
-            n_total = len(mask_sh)
-            _ann("Shading Stats", 2.80, bold=True, color=TITLE_RED)
-            _ann(f"Total daytime pts: {n_total}", 3.12)
-            _ann(f"Shading required: {n_sh}", 3.42)
-            _ann(f"({shading_pct:.1f}% of daytime)", 3.72)
+            # _ann("Location", 0.75, bold=True, color=TITLE_RED)
+            # _ann(f"Lat: {_lat:.3f}\u00b0", 1.08)
+            # _ann(f"Lon: {_lon:.3f}\u00b0", 1.38)
+            # _ann("Thresholds", 1.78, bold=True, color=TITLE_RED)
+            # _ann(f"Temp > {temp_threshold}\u00b0C", 2.10)
+            # _ann(f"GHI > {rad_threshold} W/m\u00b2", 2.40)
+            # n_sh = int(mask_sh.sum())
+            # n_total = len(mask_sh)
+            # _ann("Shading Stats", 2.80, bold=True, color=TITLE_RED)
+            # _ann(f"Total daytime pts: {n_total}", 3.12)
+            # _ann(f"Shading required: {n_sh}", 3.42)
+            # _ann(f"({shading_pct:.1f}% of daytime)", 3.72)
 
         except Exception as e:
             _err(slide, e)
@@ -1358,6 +1708,90 @@ def generate_shading_pptx_report(
 
     _shading_masks_slide()
 
+    # ═══════════════════════════════════════════════════════════
+    # ANNEXURE SLIDE – About EDS, Disclaimer, Acknowledgement
+    # ═══════════════════════════════════════════════════════════
+    def _make_annexure_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Annexure")
+        _divider(slide, 0.62)
+
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        tf = tb.text_frame
+        tf.word_wrap = True
+
+        # About EDS
+        p = tf.paragraphs[0]
+        p.text = "About EDS"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_after = Pt(6)
+
+        p = tf.add_paragraph()
+        p.text = "Environmental Design Solutions [EDS] is a sustainability advisory firm. Since 2002, EDS has worked on over 500 green building and energy efficiency projects worldwide. The team focuses on climate change mitigation, low-carbon design, building simulation, performance audits, and capacity building. EDS continues to contribute to the buildings community with useful tools through its IT services."
+        p.font.size = Pt(14)
+        p.font.color.rgb = DARK_GREY
+        p.line_spacing = 1.2
+        p.space_after = Pt(8)
+        p.level = 0
+
+        # Disclaimer
+        p = tf.add_paragraph()
+        p.text = "Disclaimer"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(4)
+        p.space_after = Pt(4)
+
+        disclaimer_items = [
+            "Climate Zone Analyser is an outcome of the best efforts of building simulation experts at EDS.",
+            "\u2022  EDS does not assume responsibility for outcomes from its use. By using this Application, the User indemnifies EDS against any damages.",
+            "\u2022  EDS does not guarantee uninterrupted availability. By using this Application, the User agrees to share uploaded information with EDS for analysis and research purposes.",
+            "\u2022  Open-source resources used: Clima - Berkley, Streamlit, Python",
+            "\u2022  EDS is not liable to inform Users about updates to the Application or underlying resources"
+        ]
+
+        for item in disclaimer_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(14)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        # Acknowledgement
+        p = tf.add_paragraph()
+        p.text = "Acknowledgement"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(6)
+        p.space_after = Pt(4)
+
+        ack_items = [
+            "\u2022  Betti, G., et al. CBE Clima Tool Build. Simul. (2023). https://doi.org/10.1007/s12273-023-1090-5",
+            "\u2022  Streamlit, \u00a9 Streamlit Inc., licensed under Apache 2.0",
+            "\u2022  Python \u00a9 Python Software Foundation, licensed under PSF License Version 2"
+        ]
+
+        for item in ack_items:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(14)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+            p.level = 0
+
+        _add_logo(slide)
+
+    _make_annexure_slide()
+
     # ── Save ──────────────────────────────────────────────────
     report_bytes = io.BytesIO()
     prs.save(report_bytes)
@@ -1397,12 +1831,15 @@ def parse_epw(epw_text: str) -> tuple:
     # split into lines and find first data row (starts with a year integer)
     lines = [ln.strip() for ln in epw_text.splitlines() if ln.strip() != ""]
     # Extract metadata from header (first line)
-    metadata = {"latitude": None, "longitude": None, "timezone": "UTC"}
+    metadata = {"latitude": None, "longitude": None, "timezone": "UTC", "city": None, "location": None}
     if len(lines) > 0:
         header = lines[0].split(",")
         try:
             # EPW header format: LOCATION,CITY,STATE,COUNTRY,DATA SOURCE,WMO STATION #,LATITUDE,LONGITUDE,TIMEZONE,ELEVATION
             # Column indices:      0        1     2     3       4           5              6         7          8        9
+            if len(header) >= 2:
+                metadata["location"] = header[0].strip()
+                metadata["city"] = header[1].strip()
             if len(header) >= 8:
                 metadata["latitude"] = float(header[6].strip())
                 metadata["longitude"] = float(header[7].strip())
@@ -2324,7 +2761,7 @@ with col_left:
     
     # Parameter Selection
     # st.markdown('<div class="control-section-header">⚙️ Parameter</div>', unsafe_allow_html=True)
-    st.write("##### ⚙️ Parameter")
+    st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
         ["Temperature", "Humidity", "Sun Path"],
@@ -2390,12 +2827,12 @@ try:
             _lat_default = float(metadata.get("latitude") or 0.0)
             _lon_default = float(metadata.get("longitude") or 0.0)
             shading_lat = st.number_input(
-                "Latitude", value=_lat_default, step=0.1, key="shading_lat",
+                "Latitude (°)", value=_lat_default, step=0.1, key="shading_lat",
                 help="Auto-read from EPW metadata",
                 width=300
             )
             shading_lon = st.number_input(
-                "Longitude", value=_lon_default, step=0.1, key="shading_lon",
+                "Longitude (°)", value=_lon_default, step=0.1, key="shading_lon",
                 help="Auto-read from EPW metadata",
                 width=300
             )
@@ -4877,9 +5314,77 @@ with col_right:
         # Reset the flag
         # st.session_state.generate_report = False
         
-    # except Exception as e:
 #     st.error(f"❌ Failed to generate report: {str(e)}")
 #     st.session_state.generate_report = False
 
 # Adding extra space at the bottom
 st.markdown("<br><br>", unsafe_allow_html=True)
+
+# Footer Section
+st.image("images/EDS-footer.png", width=2000)
+st.markdown(
+    """
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+        .footer {
+            background-color: #f8f9fa;
+            padding: 20px 0;
+            color: #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            text-align: center;
+        }
+        .footer .logo {
+            flex: 1;
+        }
+        .footer .logo img {
+            max-width: 150px;
+            height: auto;
+        }
+        .footer .social-media {
+            flex: 2;
+        }
+        .footer .social-media p {
+            margin: 0;
+            font-size: 16px;
+        }
+        .footer .icons {
+            margin-top: 10px;
+        }
+        .footer .icons a {
+            margin: 0 10px;
+            color: #666;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+        .footer .icons a:hover {
+            color: #0077b5; /* LinkedIn color as default */
+        }
+        .footer .icons a .fab {
+            font-size: 28px;
+        }
+        .footer .additional-content {
+            margin-top: 10px;
+        }
+        .footer .additional-content h4 {
+            margin: 0;
+            font-size: 18px;
+            color: #007bff;
+        }
+        .footer .additional-content p {
+            margin: 5px 0;
+            font-size: 16px;
+        }
+    </style>
+    <div style="text-align:center; font-size:14px;">
+        Email: <a href="mailto:info@edsglobal.com">info@edsglobal.com</a>   |   
+        Phone: +91 . 11 . 4056 8633   |   
+        <a href="https://twitter.com/edsglobal?lang=en" target="_blank"><i class="fab fa-twitter" style="color:#1DA1F2; margin:0 6px;"></i></a>
+        <a href="https://www.facebook.com/Environmental.Design.Solutions/" target="_blank"><i class="fab fa-facebook" style="color:#4267B2; margin:0 6px;"></i></a>
+        <a href="https://www.instagram.com/eds_global/?hl=en" target="_blank"><i class="fab fa-instagram" style="color:#E1306C; margin:0 6px;"></i></a>
+        <a href="https://www.linkedin.com/company/environmental-design-solutions/" target="_blank"><i class="fab fa-linkedin" style="color:#0077b5; margin:0 6px;"></i></a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
