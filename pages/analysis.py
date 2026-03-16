@@ -214,6 +214,7 @@ try:
                 key="wind_n_sectors",
                 label_visibility="collapsed",
                 help="Number of compass sectors in the wind rose (8 or 16 recommended)",
+                width=300,
             )
 
             st.markdown('<div class="control-section-header">⚙️ Wind Options</div>', unsafe_allow_html=True)

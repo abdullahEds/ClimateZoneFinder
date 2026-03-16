@@ -439,6 +439,133 @@ def plot_speed_histogram(wdf: pd.DataFrame) -> go.Figure:
     return fig
 
 
+# ─── Plot: Climate Bubble Chart ─────────────────────────────────────────────
+
+# 12 visually distinct colours, one per month
+_MONTH_COLORS = [
+    "#e6194b", "#f58231", "#ffe119", "#bfef45",
+    "#3cb44b", "#42d4f4", "#4363d8", "#911eb4",
+    "#f032e6", "#a9a9a9", "#9a6324", "#469990",
+]
+
+
+def plot_climate_bubble(wdf: pd.DataFrame) -> go.Figure:
+    """Temperature–Humidity–Wind bubble chart.
+
+    Each point = one EPW hour.
+
+    Axes / visual encoding
+    ----------------------
+    X   : Dry Bulb Temperature (°C)
+    Y   : Relative Humidity (%)
+    Size: Wind Speed (m/s) – larger bubble = stronger wind
+    Color: Month – seasonal context
+
+    Interpretation guide
+    --------------------
+    Large bubble at high T & high RH  → hot & humid but breezy
+                                        (natural ventilation potential)
+    Small bubble at high T & high RH  → hot, humid, stagnant
+                                        (most uncomfortable)
+    Medium/large bubble near comfort   → near-comfortable with breeze
+
+    Algorithm notes
+    ---------------
+    • A floor of +0.3 is added to wind_speed before sizing so that calm
+      winds still render as tiny visible dots.
+    • sizemode="area" keeps perception proportional (area ∝ speed).
+    • sizeref is computed from the actual data maximum so the largest
+      bubble never exceeds ~28 px in diameter.
+    """
+    needed = {"dry_bulb_temperature", "relative_humidity", "wind_speed", "month"}
+    if not needed.issubset(wdf.columns):
+        missing = needed - set(wdf.columns)
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Missing columns for bubble chart: {missing}",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            showarrow=False, font_size=13,
+        )
+        fig.update_layout(height=500)
+        return fig
+
+    tmp = wdf.dropna(
+        subset=["dry_bulb_temperature", "relative_humidity", "wind_speed"]
+    ).copy()
+
+    # Size floor: calm winds show as tiny dots, not invisible ones
+    tmp["_bubble_size"] = tmp["wind_speed"] + 0.3
+    # sizeref so the very largest bubble ≈ 28 px diameter (area mode:
+    # displayed_diameter ∝ sqrt(value/sizeref)  →  sizeref = value / (px/2)²)
+    max_bubble = float(tmp["_bubble_size"].max())
+    sizeref    = 2.0 * max_bubble / (28.0 ** 2) if max_bubble > 0 else 0.01
+
+    fig = go.Figure()
+
+    for m in range(1, 13):
+        mdata = tmp[tmp["month"] == m]
+        if mdata.empty:
+            continue
+        mname = _MONTH_NAMES[m - 1]
+        fig.add_trace(go.Scatter(
+            x          = mdata["dry_bulb_temperature"],
+            y          = mdata["relative_humidity"],
+            mode       = "markers",
+            name       = mname,
+            customdata = mdata["wind_speed"].values,
+            marker     = dict(
+                size      = mdata["_bubble_size"].values,
+                sizemode  = "area",
+                sizeref   = sizeref,
+                sizemin   = 2,
+                color     = _MONTH_COLORS[(m - 1) % len(_MONTH_COLORS)],
+                opacity   = 0.55,
+                line      = dict(width=0),
+            ),
+            hovertemplate=(
+                f"<b>{mname}</b><br>"
+                "Temp: %{x:.1f}°C<br>"
+                "RH: %{y:.0f}%<br>"
+                "Wind: %{customdata:.1f} m/s"
+                "<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title  = dict(
+            text      = "Temperature – Humidity – Wind Speed",
+            x         = 0.5,
+            font_size = 16,
+            font_color= "#2c3e50",
+        ),
+        xaxis  = dict(
+            title     = "Dry Bulb Temperature (°C)",
+            gridcolor = "rgba(200,200,200,0.4)",
+        ),
+        yaxis  = dict(
+            title     = "Relative Humidity (%)",
+            range     = [0, 105],
+            gridcolor = "rgba(200,200,200,0.4)",
+        ),
+        legend = dict(
+            title       = "Month",
+            orientation = "v",
+            font_size   = 11,
+        ),
+        height   = 560,
+        template = "plotly_white",
+        annotations=[dict(
+            text      = "Bubble size = wind speed (m/s)",
+            xref="paper", yref="paper",
+            x=0.01, y=0.99,
+            showarrow = False,
+            font      = dict(size=11, color="#888"),
+            align     = "left",
+        )],
+    )
+    return fig
+
+
 # ─── Wind statistics ──────────────────────────────────────────────────────────
 
 def compute_wind_statistics(wdf: pd.DataFrame) -> dict:
@@ -570,7 +697,10 @@ def render_wind_analysis(
     # ── 4. Speed Distribution Histogram ──────────────────────────────────────
     st.plotly_chart(plot_speed_histogram(wdf), use_container_width=True)
 
-    # ── 5. Prevailing Wind Statistics ─────────────────────────────────────────
+    # ── 5. Temperature – Humidity – Wind Bubble Chart ─────────────────────────
+    st.plotly_chart(plot_climate_bubble(wdf), use_container_width=True)
+
+    # ── 6. Prevailing Wind Statistics ─────────────────────────────────────────
     st.markdown(
         '<div style="font-size:16px;font-weight:700;color:#2c3e50;'
         'border-bottom:2px solid #3498db;padding-bottom:6px;margin:20px 0 12px;">'
