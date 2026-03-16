@@ -273,7 +273,7 @@ def plot_wind_rose(
         ))
 
     fig.update_layout(
-        title=dict(text="Wind Rose", x=0.5, font_size=16, font_color="#2c3e50"),
+        title=dict(text="Wind Rose",  font_size=16, font_color="#2c3e50"),
         polar=dict(
             radialaxis=dict(
                 visible        = True,
@@ -345,7 +345,7 @@ def plot_speed_heatmap(wdf: pd.DataFrame) -> go.Figure:
         xaxis    = dict(title="Hour of Day", tickmode="linear", dtick=3),
         yaxis    = dict(title="Day of Year"),
         coloraxis_colorbar = dict(title="m/s"),
-        title    = dict(x=0.5),
+        # title    = dict(x=0.5),
     )
     return fig
 
@@ -398,7 +398,7 @@ def plot_direction_heatmap(wdf: pd.DataFrame) -> go.Figure:
             tickvals = [0, 90, 180, 270, 360],
             ticktext = ["N 0°", "E 90°", "S 180°", "W 270°", "N 360°"],
         ),
-        title = dict(x=0.5),
+        # title = dict(x=0.5),
     )
     return fig
 
@@ -428,7 +428,7 @@ def plot_speed_histogram(wdf: pd.DataFrame) -> go.Figure:
         textposition = "outside",
     ))
     fig.update_layout(
-        title       = dict(text="Wind Speed Distribution", x=0.5, font_size=16),
+        title       = dict(text="Wind Speed Distribution", font_size=16),
         xaxis_title = "Wind Speed Bin (m/s)",
         yaxis       = dict(title="Frequency (%)", ticksuffix="%"),
         height      = 420,
@@ -534,7 +534,7 @@ def plot_climate_bubble(wdf: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         title  = dict(
             text      = "Temperature – Humidity – Wind Speed",
-            x         = 0.5,
+            # x         = 0.5,
             font_size = 16,
             font_color= "#2c3e50",
         ),
@@ -649,8 +649,7 @@ def render_wind_analysis(
     exclude_calm : When True, normalise frequencies by non-calm hours only.
     """
     st.markdown(
-        '<h3 style="color:#2c3e50;border-bottom:2px solid #3498db;'
-        'padding-bottom:8px;margin-bottom:16px;">Wind Analysis</h3>',
+        '<h3>Wind Analysis</h3>',
         unsafe_allow_html=True,
     )
 
@@ -702,8 +701,7 @@ def render_wind_analysis(
 
     # ── 6. Prevailing Wind Statistics ─────────────────────────────────────────
     st.markdown(
-        '<div style="font-size:16px;font-weight:700;color:#2c3e50;'
-        'border-bottom:2px solid #3498db;padding-bottom:6px;margin:20px 0 12px;">'
+        '<div style="font-size:16px;font-weight:700;padding-bottom:6px;margin:20px 0 12px;">'
         "Prevailing Wind Statistics</div>",
         unsafe_allow_html=True,
     )
