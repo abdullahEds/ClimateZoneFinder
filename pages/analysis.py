@@ -22,7 +22,7 @@ from modules.epw_parser import parse_epw
 from modules.ppt_report import generate_pptx_report, generate_shading_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
-from modules import dbt_module, humidity_module, wind_module
+from modules import dbt_module, humidity_module, wind_module, ventilation_module
 
 # ─── Page configuration ───────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ with col_left:
     st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
-        ["Temperature", "Humidity", "Sun Path", "Wind"],
+        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation"],
         label_visibility="collapsed",
         key="parameter_selector",
         width=300,
@@ -227,6 +227,51 @@ try:
                     "On: % of non-calm hours only."
                 ),
             )
+
+        elif selected_parameter == "Ventilation":
+            hour_range = (0, 23)
+
+            st.markdown('<div class="control-section-header">💨 Wind Threshold</div>', unsafe_allow_html=True)
+            st.number_input(
+                "Cross-vent wind threshold (m/s)",
+                value=1.5, step=0.5, min_value=0.5, max_value=10.0,
+                key="vent_wind_threshold",
+                help="Minimum wind speed for a cross-ventilation usable hour",
+                width=300,
+            )
+
+            st.markdown('<div class="control-section-header">🌡️ Comfort Temperature</div>', unsafe_allow_html=True)
+            st.number_input(
+                "Comfort min (°C)",
+                value=24.0, step=0.5, min_value=10.0, max_value=32.0,
+                key="vent_comfort_min",
+                help="Lower bound of indoor comfort temperature band",
+                width=300,
+            )
+            st.number_input(
+                "Comfort max (°C)",
+                value=26.0, step=0.5, min_value=10.0, max_value=35.0,
+                key="vent_comfort_max",
+                help="Upper bound — used as stack-ventilation trigger temperature",
+                width=300,
+            )
+
+            st.markdown('<div class="control-section-header">🔧 ACH Model</div>', unsafe_allow_html=True)
+            st.number_input(
+                "Opening factor",
+                value=0.25, step=0.05, min_value=0.05, max_value=0.80,
+                key="vent_opening_factor",
+                help="Fraction of wall area assumed open (ACH simplified model)",
+                width=300,
+            )
+            st.number_input(
+                "Ventilation effectiveness",
+                value=0.50, step=0.05, min_value=0.10, max_value=1.00,
+                key="vent_effectiveness",
+                help="Wind-to-airflow conversion factor (Cv)",
+                width=300,
+            )
+
         else:
             st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
             hour_range = st.slider(
@@ -369,6 +414,19 @@ with col_right:
             months       = _wind_months,
             n_sectors    = _wind_n_sectors,
             exclude_calm = _wind_excl_calm,
+        )
+
+    elif selected_parameter == "Ventilation":
+        _s = st.session_state.start_month_idx + 1
+        _e = st.session_state.end_month_idx + 1
+        ventilation_module.render(
+            df,
+            months         = list(range(_s, _e + 1)),
+            wind_threshold = float(st.session_state.get("vent_wind_threshold", 1.5)),
+            comfort_min    = float(st.session_state.get("vent_comfort_min",    24.0)),
+            comfort_max    = float(st.session_state.get("vent_comfort_max",    26.0)),
+            opening_factor = float(st.session_state.get("vent_opening_factor",  0.25)),
+            effectiveness  = float(st.session_state.get("vent_effectiveness",   0.50)),
         )
 
     else:
