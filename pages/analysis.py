@@ -22,7 +22,7 @@ from modules.epw_parser import parse_epw
 from modules.ppt_report import generate_pptx_report, generate_shading_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
-from modules import dbt_module, humidity_module, wind_module, ventilation_module
+from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module
 
 # ─── Page configuration ───────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ with col_left:
     st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
-        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation"],
+        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort"],
         label_visibility="collapsed",
         key="parameter_selector",
         width=300,
@@ -226,6 +226,27 @@ try:
                     "Off: bar frequencies = % of total hours. "
                     "On: % of non-calm hours only."
                 ),
+            )
+
+        elif selected_parameter == "Thermal Comfort":
+            hour_range = (0, 23)
+
+            st.markdown('<div class="control-section-header">🌡️ Comfort Model</div>', unsafe_allow_html=True)
+            st.selectbox(
+                "Comfort model",
+                ["Both", "Adaptive", "Static"],
+                key="tc_comfort_model",
+                label_visibility="collapsed",
+                help="Adaptive = ASHRAE 55 running mean; Static = fixed 22–26°C / 30–60% RH zone",
+                width=300,
+            )
+
+            st.markdown('<div class="control-section-header">💨 Air Speed</div>', unsafe_allow_html=True)
+            st.toggle(
+                "Wind-speed comfort adjustment",
+                value=False,
+                key="tc_air_speed_adjust",
+                help="Raise upper comfort limit by 1.5°C when wind speed > 1.5 m/s",
             )
 
         elif selected_parameter == "Ventilation":
@@ -414,6 +435,16 @@ with col_right:
             months       = _wind_months,
             n_sectors    = _wind_n_sectors,
             exclude_calm = _wind_excl_calm,
+        )
+
+    elif selected_parameter == "Thermal Comfort":
+        _s = st.session_state.start_month_idx + 1
+        _e = st.session_state.end_month_idx + 1
+        thermal_comfort_module.render(
+            df,
+            months           = list(range(_s, _e + 1)),
+            comfort_model    = st.session_state.get("tc_comfort_model",    "Both"),
+            air_speed_adjust = bool(st.session_state.get("tc_air_speed_adjust", False)),
         )
 
     elif selected_parameter == "Ventilation":
