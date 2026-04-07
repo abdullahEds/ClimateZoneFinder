@@ -438,185 +438,194 @@ def render_sun_path_section(df: pd.DataFrame, metadata: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    col_selector = st.columns([1, 4])
-    with col_selector[0]:
-        chart_type = st.selectbox(
-            "Chart Type:",
-            ["Sun Path", "Dry Bulb Temperature", "Direct Normal Radiation",
-             "Global Horizontal Radiation", "Shading"],
-            key="sun_chart_type",
-        )
+    # using tabs for better UX and to free up space for the extended shading analysis
+    tabs = st.tabs(
+        ["Sun Path", "Dry Bulb Temp", "Direct Normal Rad", "Global Hor Rad", "Shading"]
+    )
+    tab1, tab2, tab3, tab4, tab5 = tabs
+    chart_types = ["Sun Path", "Dry Bulb Temperature", "Direct Normal Radiation", "Global Horizontal Radiation", "Shading"]
 
-    metrics = plot_sun_path(df, metadata, chart_type)
+    with tab1:
+        metrics = plot_sun_path(df, metadata, "Sun Path")
 
-    # ── Shading metrics KPI cards ──────────────────────────────────────────────
-    if chart_type == "Shading" and metrics:
+    with tab2:
+        metrics = plot_sun_path(df, metadata, "Dry Bulb Temperature")
+
+    with tab3:
+        metrics = plot_sun_path(df, metadata, "Direct Normal Radiation")
+
+    with tab4:
+        metrics = plot_sun_path(df, metadata, "Global Horizontal Radiation")
+
+    with tab5:
+        metrics = plot_sun_path(df, metadata, "Shading")
+        
+        # ── Shading metrics KPI cards ──────────────────────────────────────────────
+        if metrics:
+            st.markdown("---")
+            st.markdown(
+                "<h4 style='text-align: left;'>📊 Shading Metrics</h4>",
+                unsafe_allow_html=True,
+            )
+            metric_col1, metric_col2 = st.columns(2)
+            with metric_col1:
+                st.metric(
+                    label="Total Sunshine Hours",
+                    value=f"{metrics.get('total_sunshine_hours', 0):.1f}",
+                    help="Hours with Global Horizontal Irradiance > 300 Wh/m²",
+                )
+            with metric_col2:
+                st.metric(
+                    label="Required Shading Hours",
+                    value=f"{metrics.get('required_shading_hours', 0):.1f}",
+                    help="Hours where Temperature > 28°C AND GHI > 315 Wh/m²",
+                )
+
+        # ── Extended Shading Analysis ───────────────────────────────────────────
+
+        _temp_thr = float(st.session_state.get("temp_threshold", 28.0))
+        _rad_thr  = float(st.session_state.get("rad_threshold", 315.0))
+        _lat   = float(st.session_state.get("shading_lat",  metadata.get("latitude")  or 0.0))
+        _lon   = float(st.session_state.get("shading_lon",  metadata.get("longitude") or 0.0))
+        _cutoff   = float(st.session_state.get("design_cutoff_angle", 45.0))
+        _tz_str   = metadata.get("timezone", "UTC")
+
+        # ── 1. THERMAL & RADIATION MATRIX ─────────────────────────────────────────
         st.markdown("---")
         st.markdown(
-            "<h4 style='text-align: left;'>📊 Shading Metrics</h4>",
+            "<h4 style='margin-bottom:4px;'>Thermal &amp; Radiation Matrix"
+            f"<span style='font-size:13px; font-weight:400; color:#666; margin-left:12px;'>"
+            f"Black border = Temp &gt; {_temp_thr}°C AND GHI &gt; {_rad_thr} W/m²</span></h4>",
             unsafe_allow_html=True,
         )
-        metric_col1, metric_col2 = st.columns(2)
-        with metric_col1:
-            st.metric(
-                label="Total Sunshine Hours",
-                value=f"{metrics.get('total_sunshine_hours', 0):.1f}",
-                help="Hours with Global Horizontal Irradiance > 300 Wh/m²",
-            )
-        with metric_col2:
-            st.metric(
-                label="Required Shading Hours",
-                value=f"{metrics.get('required_shading_hours', 0):.1f}",
-                help="Hours where Temperature > 28°C AND GHI > 315 Wh/m²",
-            )
 
-    # ── Extended Shading Analysis (only when Shading mode is active) ───────────
-    if chart_type != "Shading":
-        return
+        try:
+            temp_matrix, rad_matrix, overheat_mask = build_thermal_matrix(df, _temp_thr, _rad_thr)
+            hours_labels = [f"{h:02d}:00" for h in range(24)]
 
-    _temp_thr = float(st.session_state.get("temp_threshold", 28.0))
-    _rad_thr  = float(st.session_state.get("rad_threshold", 315.0))
-    _lat   = float(st.session_state.get("shading_lat",  metadata.get("latitude")  or 0.0))
-    _lon   = float(st.session_state.get("shading_lon",  metadata.get("longitude") or 0.0))
-    _cutoff   = float(st.session_state.get("design_cutoff_angle", 45.0))
-    _tz_str   = metadata.get("timezone", "UTC")
+            hover_text = []
+            for h_idx in range(24):
+                row_txt = []
+                for m_idx in range(12):
+                    t_v = temp_matrix.iloc[h_idx, m_idx]
+                    r_v = rad_matrix.iloc[h_idx, m_idx]
+                    warn = " ⚠️ OVERHEATING" if overheat_mask.iloc[h_idx, m_idx] else ""
+                    row_txt.append(
+                        f"<b>{hours_labels[h_idx]}, {_MONTH_SHORT[m_idx]}</b><br>"
+                        f"Avg Temp: {t_v:.1f}°C<br>"
+                        f"Avg GHI: {r_v:.0f} W/m²{warn}"
+                    )
+                hover_text.append(row_txt)
 
-    # ── 1. THERMAL & RADIATION MATRIX ─────────────────────────────────────────
-    st.markdown("---")
-    st.markdown(
-        "<h4 style='margin-bottom:4px;'>Thermal &amp; Radiation Matrix"
-        f"<span style='font-size:13px; font-weight:400; color:#666; margin-left:12px;'>"
-        f"Black border = Temp &gt; {_temp_thr}°C AND GHI &gt; {_rad_thr} W/m²</span></h4>",
-        unsafe_allow_html=True,
-    )
-
-    try:
-        temp_matrix, rad_matrix, overheat_mask = build_thermal_matrix(df, _temp_thr, _rad_thr)
-        hours_labels = [f"{h:02d}:00" for h in range(24)]
-
-        hover_text = []
-        for h_idx in range(24):
-            row_txt = []
-            for m_idx in range(12):
-                t_v = temp_matrix.iloc[h_idx, m_idx]
-                r_v = rad_matrix.iloc[h_idx, m_idx]
-                warn = " ⚠️ OVERHEATING" if overheat_mask.iloc[h_idx, m_idx] else ""
-                row_txt.append(
-                    f"<b>{hours_labels[h_idx]}, {_MONTH_SHORT[m_idx]}</b><br>"
-                    f"Avg Temp: {t_v:.1f}°C<br>"
-                    f"Avg GHI: {r_v:.0f} W/m²{warn}"
+            fig_matrix = go.Figure(
+                go.Heatmap(
+                    z=temp_matrix.values,
+                    x=_MONTH_SHORT,
+                    y=hours_labels,
+                    colorscale="RdYlBu_r",
+                    colorbar=dict(title=dict(text="°C", side="right"), thickness=14, len=0.8),
+                    text=hover_text,
+                    hovertemplate="%{text}<extra></extra>",
+                    showscale=True,
                 )
-            hover_text.append(row_txt)
-
-        fig_matrix = go.Figure(
-            go.Heatmap(
-                z=temp_matrix.values,
-                x=_MONTH_SHORT,
-                y=hours_labels,
-                colorscale="RdYlBu_r",
-                colorbar=dict(title=dict(text="°C", side="right"), thickness=14, len=0.8),
-                text=hover_text,
-                hovertemplate="%{text}<extra></extra>",
-                showscale=True,
             )
+
+            shapes = []
+            for h_idx in range(24):
+                for m_idx in range(12):
+                    if overheat_mask.iloc[h_idx, m_idx]:
+                        shapes.append(dict(
+                            type="rect", xref="x", yref="y",
+                            x0=m_idx - 0.5, x1=m_idx + 0.5,
+                            y0=h_idx - 0.5, y1=h_idx + 0.5,
+                            line=dict(color="#080808", width=2.5),
+                            fillcolor="rgba(0,0,0,0)",
+                        ))
+
+            n_overheat = int(overheat_mask.values.sum())
+            fig_matrix.update_layout(
+                xaxis_title="Month",
+                yaxis_title="Hour",
+                height=540,
+                shapes=shapes,
+                template="plotly_white",
+                margin=dict(l=70, r=90, t=20, b=50),
+                annotations=[dict(
+                    x=1.13, y=0.5, xref="paper", yref="paper",
+                    text=f"<b>{n_overheat}</b><br>cells<br>overheat",
+                    showarrow=False,
+                    font=dict(size=11, color="#E65100"),
+                    align="center",
+                )],
+            )
+
+            st.plotly_chart(fig_matrix, use_container_width=True)
+
+        except Exception as _e:
+            st.error(f"Could not build Thermal Matrix: {_e}")
+
+        # ── 2. ORIENTATION SHADING ANALYSIS ───────────────────────────────────────
+        st.markdown("---")
+        st.markdown(
+            "<h4 style='margin-bottom:4px;'>🏗️ Orientation Shading Analysis"
+            f"<span style='font-size:13px; font-weight:400; color:#666; margin-left:12px;'>"
+            f"Design cutoff angle: {_cutoff}°</span></h4>",
+            unsafe_allow_html=True,
         )
 
-        shapes = []
-        for h_idx in range(24):
-            for m_idx in range(12):
-                if overheat_mask.iloc[h_idx, m_idx]:
-                    shapes.append(dict(
-                        type="rect", xref="x", yref="y",
-                        x0=m_idx - 0.5, x1=m_idx + 0.5,
-                        y0=h_idx - 0.5, y1=h_idx + 0.5,
-                        line=dict(color="#080808", width=2.5),
-                        fillcolor="rgba(0,0,0,0)",
-                    ))
-
-        n_overheat = int(overheat_mask.values.sum())
-        fig_matrix.update_layout(
-            xaxis_title="Month",
-            yaxis_title="Hour",
-            height=540,
-            shapes=shapes,
-            template="plotly_white",
-            margin=dict(l=70, r=90, t=20, b=50),
-            annotations=[dict(
-                x=1.13, y=0.5, xref="paper", yref="paper",
-                text=f"<b>{n_overheat}</b><br>cells<br>overheat",
-                showarrow=False,
-                font=dict(size=11, color="#E65100"),
-                align="center",
-            )],
-        )
-
-        st.plotly_chart(fig_matrix, use_container_width=True)
-
-    except Exception as _e:
-        st.error(f"Could not build Thermal Matrix: {_e}")
-
-    # ── 2. ORIENTATION SHADING ANALYSIS ───────────────────────────────────────
-    st.markdown("---")
-    st.markdown(
-        "<h4 style='margin-bottom:4px;'>🏗️ Orientation Shading Analysis"
-        f"<span style='font-size:13px; font-weight:400; color:#666; margin-left:12px;'>"
-        f"Design cutoff angle: {_cutoff}°</span></h4>",
-        unsafe_allow_html=True,
-    )
-
-    try:
-        overheat_df_sa = get_overheating_hours(df, _temp_thr, _rad_thr)
-        if overheat_df_sa.empty:
-            st.info("No overheating hours found with current thresholds.")
-        else:
-            with st.spinner("Computing solar positions for overheating hours…"):
-                solar_pos = compute_solar_angles(overheat_df_sa, _lat, _lon, _tz_str)
-
-            if solar_pos.empty:
-                st.info("No daytime overheating sun positions found.")
+        try:
+            overheat_df_sa = get_overheating_hours(df, _temp_thr, _rad_thr)
+            if overheat_df_sa.empty:
+                st.info("No overheating hours found with current thresholds.")
             else:
-                n_total = len(solar_pos)
-                st.caption(
-                    f"**{n_total}** overheating daytime sun positions "
-                    f"({len(overheat_df_sa)} EPW rows → {n_total} above horizon)"
-                )
+                with st.spinner("Computing solar positions for overheating hours…"):
+                    solar_pos = compute_solar_angles(overheat_df_sa, _lat, _lon, _tz_str)
 
-                orient_df = build_orientation_table(solar_pos, _cutoff)
-
-                def _protection_badge(pct):
-                    if pct is None:
-                        return "—"
-                    color = (
-                        "#4caf50" if pct >= 95
-                        else ("#ff9800" if pct >= 80 else "#f44336")
-                    )
-                    return (
-                        f'<span style="background:{color}; color:white; padding:2px 8px; '
-                        f'border-radius:10px; font-weight:600; font-size:12px;">'
-                        f'{pct:.1f}%</span>'
+                if solar_pos.empty:
+                    st.info("No daytime overheating sun positions found.")
+                else:
+                    n_total = len(solar_pos)
+                    st.caption(
+                        f"**{n_total}** overheating daytime sun positions "
+                        f"({len(overheat_df_sa)} EPW rows → {n_total} above horizon)"
                     )
 
-                html_rows = ""
-                for _, _row in orient_df.iterrows():
-                    badge = _protection_badge(_row.get("Protection (%)"))
-                    _dh  = f"{_row['D/H (Overhang)']:.3f}" if _row["D/H (Overhang)"] is not None else "—"
-                    _dw  = f"{_row['D/W (Fin)']:.3f}"       if _row["D/W (Fin)"] is not None else "—"
-                    _min_vsa = f"{_row['Min VSA (°)']:.1f}°"    if _row["Min VSA (°)"] is not None else "—"
-                    _max_hsa = f"{_row['Max |HSA| (°)']:.1f}°"  if _row["Max |HSA| (°)"] is not None else "—"
-                    html_rows += (
-                        "<tr>"
-                        f"<td style='padding:6px 12px; font-weight:600;'>{_row['Orientation']}</td>"
-                        f"<td style='padding:6px 12px; text-align:center;'>{_row['Rays Hitting']}</td>"
-                        f"<td style='padding:6px 12px; text-align:center;'>{_min_vsa}</td>"
-                        f"<td style='padding:6px 12px; text-align:center;'>{_max_hsa}</td>"
-                        f"<td style='padding:6px 12px; text-align:center;'>{_dh}</td>"
-                        f"<td style='padding:6px 12px; text-align:center;'>{_dw}</td>"
-                        f"<td style='padding:6px 12px; text-align:center;'>{badge}</td>"
-                        "</tr>"
-                    )
+                    orient_df = build_orientation_table(solar_pos, _cutoff)
 
-                st.markdown(
-                    f"""
+                    def _protection_badge(pct):
+                        if pct is None:
+                            return "—"
+                        color = (
+                            "#4caf50" if pct >= 95
+                            else ("#ff9800" if pct >= 80 else "#f44336")
+                        )
+                        return (
+                            f'<span style="background:{color}; color:white; padding:2px 8px; '
+                            f'border-radius:10px; font-weight:600; font-size:12px;">'
+                            f'{pct:.1f}%</span>'
+                        )
+
+                    html_rows = ""
+                    for _, _row in orient_df.iterrows():
+                        badge = _protection_badge(_row.get("Protection (%)"))
+                        _dh  = f"{_row['D/H (Overhang)']:.3f}" if _row["D/H (Overhang)"] is not None else "—"
+                        _dw  = f"{_row['D/W (Fin)']:.3f}"       if _row["D/W (Fin)"] is not None else "—"
+                        _min_vsa = f"{_row['Min VSA (°)']:.1f}°"    if _row["Min VSA (°)"] is not None else "—"
+                        _max_hsa = f"{_row['Max |HSA| (°)']:.1f}°"  if _row["Max |HSA| (°)"] is not None else "—"
+                        html_rows += (
+                            "<tr>"
+                            f"<td style='padding:6px 12px; font-weight:600;'>{_row['Orientation']}</td>"
+                            f"<td style='padding:6px 12px; text-align:center;'>{_row['Rays Hitting']}</td>"
+                            f"<td style='padding:6px 12px; text-align:center;'>{_min_vsa}</td>"
+                            f"<td style='padding:6px 12px; text-align:center;'>{_max_hsa}</td>"
+                            f"<td style='padding:6px 12px; text-align:center;'>{_dh}</td>"
+                            f"<td style='padding:6px 12px; text-align:center;'>{_dw}</td>"
+                            f"<td style='padding:6px 12px; text-align:center;'>{badge}</td>"
+                            "</tr>"
+                        )
+
+                    st.markdown(
+                        f"""
 <style>
 .shading-table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
 .shading-table th {{
@@ -648,45 +657,45 @@ def render_sun_path_section(df: pd.DataFrame, metadata: dict) -> None:
   <span style='color:#f44336; font-weight:600;'>■</span> &lt;80%
 </p>
 """,
-                    unsafe_allow_html=True,
-                )
+                        unsafe_allow_html=True,
+                    )
 
-                # ── 3. SHADING MASK MINI DIAGRAMS ─────────────────────────────
-                st.markdown(
-                    "<h5 style='margin-top:22px; margin-bottom:4px;'>"
-                    "🔵 Shading Mask Diagrams</h5>"
-                    "<p style='font-size:12px; color:#666; margin-bottom:10px;'>"
-                    "<span style='color:#E65100; font-weight:600;'>●</span> Overheating (hits façade) &nbsp;|&nbsp; "
-                    "<span style='color:lightgrey; font-weight:600;'>●</span> Overheating (other side) &nbsp;|&nbsp; "
-                    "<span style='color:#1565C0; font-weight:600;'>- -</span> VSA cutoff arc &nbsp;|&nbsp; "
-                    "<span style='color:#388E3C; font-weight:600;'>—</span> Façade direction</p>",
-                    unsafe_allow_html=True,
-                )
+                    # ── 3. SHADING MASK MINI DIAGRAMS ─────────────────────────────
+                    st.markdown(
+                        "<h5 style='margin-top:22px; margin-bottom:4px;'>"
+                        "🔵 Shading Mask Diagrams</h5>"
+                        "<p style='font-size:12px; color:#666; margin-bottom:10px;'>"
+                        "<span style='color:#E65100; font-weight:600;'>●</span> Overheating (hits façade) &nbsp;|&nbsp; "
+                        "<span style='color:lightgrey; font-weight:600;'>●</span> Overheating (other side) &nbsp;|&nbsp; "
+                        "<span style='color:#1565C0; font-weight:600;'>- -</span> VSA cutoff arc &nbsp;|&nbsp; "
+                        "<span style='color:#388E3C; font-weight:600;'>—</span> Façade direction</p>",
+                        unsafe_allow_html=True,
+                    )
 
-                orient_pairs = list(_ORIENTATIONS.items())
-                for _row_start in range(0, 8, 4):
-                    dial_cols = st.columns(4)
-                    for _col_idx, (_oname, _faz) in enumerate(
-                        orient_pairs[_row_start: _row_start + 4]
-                    ):
-                        with dial_cols[_col_idx]:
-                            st.markdown(
-                                f"<p style='font-size:11px; font-weight:600; "
-                                f"text-align:center; margin-bottom:2px;'>{_oname}</p>",
-                                unsafe_allow_html=True,
-                            )
-                            _mini_fig = make_shading_mask_chart(solar_pos, _faz, _cutoff)
-                            _safe_key = (
-                                _oname.replace(" ", "_")
-                                      .replace("(", "")
-                                      .replace(")", "")
-                                      .replace("°", "deg")
-                            )
-                            st.plotly_chart(
-                                _mini_fig,
-                                use_container_width=True,
-                                key=f"mini_{_safe_key}",
-                            )
+                    orient_pairs = list(_ORIENTATIONS.items())
+                    for _row_start in range(0, 8, 4):
+                        dial_cols = st.columns(4)
+                        for _col_idx, (_oname, _faz) in enumerate(
+                            orient_pairs[_row_start: _row_start + 4]
+                        ):
+                            with dial_cols[_col_idx]:
+                                st.markdown(
+                                    f"<p style='font-size:11px; font-weight:600; "
+                                    f"text-align:center; margin-bottom:2px;'>{_oname}</p>",
+                                    unsafe_allow_html=True,
+                                )
+                                _mini_fig = make_shading_mask_chart(solar_pos, _faz, _cutoff)
+                                _safe_key = (
+                                    _oname.replace(" ", "_")
+                                          .replace("(", "")
+                                          .replace(")", "")
+                                          .replace("°", "deg")
+                                )
+                                st.plotly_chart(
+                                    _mini_fig,
+                                    use_container_width=True,
+                                    key=f"mini_{_safe_key}",
+                                )
 
-    except Exception as _e:
-        st.error(f"Could not build Orientation Shading Analysis: {_e}")
+        except Exception as _e:
+            st.error(f"Could not build Orientation Shading Analysis: {_e}")
