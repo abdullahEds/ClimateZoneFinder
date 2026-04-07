@@ -244,6 +244,41 @@ st.markdown("""
         padding: 0 10px;
         text-align: justify;
     }
+    /* Standardize button appearance so text fits and layout is consistent */
+    div.stButton, div.stDownloadButton { display: flex !important; justify-content: center !important; }
+    div.stButton > button, div.stDownloadButton > button,
+    a.stLinkButton, a.stLinkButton > button, button[data-baseweb="button"] {
+        padding: 8px 14px !important;
+        font-size: 14px !important;
+        line-height: 1.2 !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+        min-width: 200px !important;
+        max-width: 260px !important;
+        width: auto !important;
+        min-height: 40px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        box-sizing: border-box !important;
+        margin-bottom: 12px !important;
+    }
+
+    /* Link buttons (download links) look like buttons */
+    a.stLinkButton {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 8px 14px !important;
+        text-decoration: none !important;
+        color: inherit !important;
+        background: transparent !important;
+        border-radius: 8px !important;
+        margin-bottom: 18px !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -1243,11 +1278,14 @@ with left_col:
         if not result.empty and pd.notna(result.iloc[0].get("EPW File", None)):
             epw_url = result.iloc[0]["EPW File"]
             if epw_url and str(epw_url).strip() != "" and str(epw_url) != "0":
-                st.link_button("Download EPW", epw_url, type="secondary", width=200)
+                st.link_button("Download EPW", epw_url, type="primary", width=200)
+                if st.button("Analyze in Dashboard", key="analyze_epw_ashrae", width=200, type="secondary"):
+                    st.session_state["epw_url"] = epw_url
+                    st.switch_page("pages/analysis.py")
             else:
-                st.button("Download EPW", type="secondary", disabled=True, width=200)
+                st.button("Download EPW", type="primary", disabled=True, width=200)
         else:
-            st.button("Download EPW", type="secondary", disabled=True, width=200)
+            st.button("Download EPW", type="primary", disabled=True, width=200)
         if report_clicked and not result.empty:
             st.info("Report generation for ASHRAE is under development. Please check back soon.")
 
@@ -1295,11 +1333,14 @@ with left_col:
         if not result.empty and pd.notna(result.iloc[0].get("EPW File", None)):
             epw_url = result.iloc[0]["EPW File"]
             if epw_url and str(epw_url).strip() != "" and str(epw_url) != "0":
-                st.link_button("Download EPW", epw_url, type="secondary", width=200)
+                st.link_button("Download EPW", epw_url, type="primary", width=200)
+                if st.button("Analyze in Dashboard", key="analyze_epw_nbc", width=200, type="secondary"):
+                    st.session_state["epw_url"] = epw_url
+                    st.switch_page("pages/analysis.py")
             else:
-                st.link_button("Download EPW", type="secondary", disabled=True, width=200)
+                st.link_button("Download EPW", type="primary", disabled=True, width=200)
         else:
-            st.link_button("Download EPW", type="secondary", disabled=True, width=200)
+            st.link_button("Download EPW", type="primary", disabled=True, width=200)
         
         # report_clicked and not result.empty:
         epw_file = result.iloc[0].get("EPW File", "Not Available")

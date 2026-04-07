@@ -942,36 +942,38 @@ def render(
         "Strategy Map",
         "Degree Hours",
     ]
-    btn_cols = st.columns(len(tc_tabs), gap="small")
-    for col, tab_name in zip(btn_cols, tc_tabs):
-        with col:
-            if st.button(tab_name, key=f"tc_tab_{tab_name}", use_container_width=True):
-                st.session_state[tab_key] = tab_name
+    # btn_cols = st.columns(len(tc_tabs), gap="small")
+    # for col, tab_name in zip(btn_cols, tc_tabs):
+    #     with col:
+    #         if st.button(tab_name, key=f"tc_tab_{tab_name}", use_container_width=True):
+    #             st.session_state[tab_key] = tab_name
 
-    active_tab = st.session_state[tab_key]
+    # using tabs component which is used in other modules
+    tabs = st.tabs(tc_tabs)
+    tab_psychrometric, tab_adaptive, tab_monthly, tab_heatmap, tab_strategy, tab_degrees = tabs
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Tab content ───────────────────────────────────────────────────────────
-    if active_tab == "Psychrometric Chart":
+    with tab_psychrometric:
         _render_psychrometric_chart(fdf, months)
 
-    elif active_tab == "Adaptive Comfort":
+    with tab_adaptive:
         if comfort_model in ("Adaptive", "Both"):
             _render_adaptive_comfort_chart(fdf, months)
         else:
             st.info("Adaptive comfort model is not selected. Use the sidebar to enable it.")
 
-    elif active_tab == "Monthly Breakdown":
+    with tab_monthly:
         _render_monthly_comfort_breakdown(fdf)
 
-    elif active_tab == "Comfort Heatmap":
+    with tab_heatmap:
         _render_comfort_heatmap(fdf)
 
-    elif active_tab == "Strategy Map":
+    with tab_strategy:
         _render_strategy_chart(fdf)
 
-    elif active_tab == "Degree Hours":
+    with tab_degrees:
         _render_degree_hours_chart(degree, months)
 
     # ── Comfort breakdown summary ─────────────────────────────────────────────
