@@ -487,8 +487,7 @@ with col_left:
     # ── PowerPoint report download ─────────────────────────────────────────────
     st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
 
-    _active_chart = st.session_state.get("sun_chart_type", "Sun Path")
-    _is_shading   = selected_parameter == "Sun Path" and _active_chart == "Shading"
+    _is_shading   = selected_parameter == "Sun Path"
 
     try:
         _year   = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
