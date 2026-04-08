@@ -70,25 +70,99 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
         solpos["r"] = 90 - solpos["apparent_elevation"]
         solpos["theta"] = solpos["azimuth"]
 
-        epw_data = data.set_index("datetime")
+        # --- Robust EPW handling: column aliasing, timezone, resampling ---
+        df = data.copy()
+
+        # Ensure datetime exists
+        if "datetime" not in df.columns:
+            if isinstance(df.index, pd.DatetimeIndex):
+                df = df.reset_index().rename(columns={df.index.name or "index": "datetime"})
+            else:
+                st.error("EPW data missing 'datetime' column or DatetimeIndex.")
+                return {}
+
+        # common aliases mapping (helps when EPW has different field names)
+        common_aliases = {
+            'dni': 'direct_normal_irradiance',
+            'direct normal': 'direct_normal_irradiance',
+            'direct_normal': 'direct_normal_irradiance',
+            'dhi': 'diffuse_horizontal_irradiance',
+            'diffuse horizontal': 'diffuse_horizontal_irradiance',
+            'ghi': 'global_horizontal_irradiance',
+            'global horizontal': 'global_horizontal_irradiance',
+            'dry bulb': 'dry_bulb_temperature',
+            'dry_bulb': 'dry_bulb_temperature',
+            'drybulb': 'dry_bulb_temperature',
+            'temperature': 'dry_bulb_temperature',
+            'temp': 'dry_bulb_temperature',
+        }
+
+        # Build rename map by matching aliases against actual column names
+        cols_lower = {c: c.lower() for c in df.columns}
+        rename_map = {}
+        for alias, target in common_aliases.items():
+            if target in df.columns:
+                continue
+            for orig, low in cols_lower.items():
+                if alias == low or alias in low:
+                    if orig != 'datetime' and target not in df.columns:
+                        rename_map[orig] = target
+                        break
+
+        if rename_map:
+            df = df.rename(columns=rename_map)
+            st.info(f"Detected and remapped EPW columns: {', '.join([f'{v}←{k}' for k,v in rename_map.items()])}")
+
+        # columns we'll try to join
+        join_cols = [c for c in ["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"] if c in df.columns]
+
+        epw_data = df.set_index("datetime")
         if epw_data.index.tz is None:
             epw_data.index = epw_data.index.tz_localize(tz)
         else:
             epw_data.index = epw_data.index.tz_convert(tz)
         epw_data.index = epw_data.index.map(lambda x: x.replace(year=2020))
 
-        solpos_merged = solpos.copy()
-        solpos_merged = solpos_merged.join(
-            epw_data[["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"]],
-            how="left",
-        )
+        # Resample to hourly if timestamps are not on the hour (many EPW are half-hour)
+        epw_hourly = epw_data
+        try:
+            has_half_hour = any(t.minute != 0 for t in epw_hourly.index)
+        except Exception:
+            has_half_hour = False
 
+        if has_half_hour:
+            # Resample only numeric join columns to avoid mean() failing on object dtype
+            num_cols = [c for c in join_cols if c in epw_hourly.columns]
+            if num_cols:
+                epw_num = epw_hourly[num_cols].apply(pd.to_numeric, errors='coerce')
+                epw_num = epw_num.resample('h').mean()
+                epw_hourly = epw_num.dropna(how='all')
+            else:
+                # nothing numeric to resample; fall back to hourly index dedupe
+                epw_hourly = epw_hourly.resample('h').first().dropna(how='all')
+
+        # Join solar positions to hourly EPW values
+        solpos_merged = solpos.copy()
+        if join_cols:
+            solpos_merged = solpos_merged.join(epw_hourly[join_cols], how="left")
+        else:
+            solpos_merged = solpos_merged.copy()
+
+        # compute GHI robustly
         altitude_rad = np.radians(solpos_merged["apparent_elevation"])
-        dni = solpos_merged["direct_normal_irradiance"].fillna(0)
-        dhi = solpos_merged["diffuse_horizontal_irradiance"].fillna(0)
+        dni = solpos_merged.get("direct_normal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
+        dhi = solpos_merged.get("diffuse_horizontal_irradiance", pd.Series(0, index=solpos_merged.index)).fillna(0)
         solpos_merged["global_horizontal_irradiance"] = (
             np.maximum(0, np.sin(altitude_rad)) * dni + dhi
         )
+
+        # Diagnostics: warn if expected series are missing or zero
+        if chart_type == "Direct Normal Radiation" and (solpos_merged.get("direct_normal_irradiance") is None or solpos_merged["direct_normal_irradiance"].dropna().sum() == 0):
+            st.warning("Direct Normal Irradiance appears missing or zero for this EPW.")
+        if chart_type == "Global Horizontal Radiation" and solpos_merged["global_horizontal_irradiance"].dropna().sum() == 0:
+            st.warning("Global Horizontal Irradiance appears zero for daytime—check DHI/DNI fields.")
+        if chart_type == "Dry Bulb Temperature" and (solpos_merged.get("dry_bulb_temperature") is None or solpos_merged["dry_bulb_temperature"].dropna().sum() == 0):
+            st.warning("Dry bulb temperature appears missing for this EPW.")
 
         fig = go.Figure()
 
@@ -327,11 +401,17 @@ def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Pat
                 continue
 
             sol_merged = sol.copy()
-            sol_merged = sol_merged.join(
-                epw_data[["dry_bulb_temperature", "direct_normal_irradiance",
-                           "diffuse_horizontal_irradiance"]],
-                how="left",
-            )
+            if 'epw_hourly' in locals() and len(epw_hourly) > 0:
+                try:
+                    nearest = epw_hourly[[c for c in ["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"] if c in epw_hourly.columns]].reindex(sol.index, method='nearest', tolerance=pd.Timedelta('30min'))
+                except Exception:
+                    nearest = epw_hourly[[c for c in ["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"] if c in epw_hourly.columns]].reindex(sol.index)
+                sol_merged = sol_merged.join(nearest, how='left')
+            else:
+                sol_merged = sol_merged.join(
+                    epw_data[["dry_bulb_temperature", "direct_normal_irradiance", "diffuse_horizontal_irradiance"]],
+                    how="left",
+                )
             alt_r = np.radians(sol_merged["apparent_elevation"])
             sol_merged["global_horizontal_irradiance"] = (
                 np.maximum(0, np.sin(alt_r)) * sol_merged["direct_normal_irradiance"].fillna(0)
@@ -446,18 +526,23 @@ def render_sun_path_section(df: pd.DataFrame, metadata: dict) -> None:
     chart_types = ["Sun Path", "Dry Bulb Temperature", "Direct Normal Radiation", "Global Horizontal Radiation", "Shading"]
 
     with tab1:
+        st.session_state["sun_chart_type"] = "Sun Path"
         metrics = plot_sun_path(df, metadata, "Sun Path")
 
     with tab2:
+        st.session_state["sun_chart_type"] = "Dry Bulb Temperature"
         metrics = plot_sun_path(df, metadata, "Dry Bulb Temperature")
 
     with tab3:
+        st.session_state["sun_chart_type"] = "Direct Normal Radiation"
         metrics = plot_sun_path(df, metadata, "Direct Normal Radiation")
 
     with tab4:
+        st.session_state["sun_chart_type"] = "Global Horizontal Radiation"
         metrics = plot_sun_path(df, metadata, "Global Horizontal Radiation")
 
     with tab5:
+        st.session_state["sun_chart_type"] = "Shading"
         metrics = plot_sun_path(df, metadata, "Shading")
         
         # ── Shading metrics KPI cards ──────────────────────────────────────────────
