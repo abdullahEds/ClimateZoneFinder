@@ -283,6 +283,7 @@ with col_left:
                 uploaded = io.BytesIO(z.read(epw_names[0]))
             else:
                 uploaded = io.BytesIO(content)
+            st.write(f"EPW name: {epw_names[0] if is_zip else epw_url}")
         except Exception as _e:
             st.error(f"Failed to fetch EPW from URL: {_e}")
 
@@ -461,7 +462,7 @@ with col_left:
     if "end_month_idx" not in st.session_state:
         st.session_state.end_month_idx = 11
 
-    month_col1, month_col2, _ = st.columns([1, 1, 0.5], gap="small")
+    month_col1, month_col2, month_col3= st.columns([0.8, 0.8, 0.9], gap="small")
 
     with month_col1:
         start_month = st.selectbox(
@@ -487,8 +488,18 @@ with col_left:
     # ── PowerPoint report download ─────────────────────────────────────────────
     st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
 
-    _active_chart = st.session_state.get("sun_chart_type", "Sun Path")
-    _is_shading   = selected_parameter == "Sun Path" and _active_chart == "Shading"
+    # Let user explicitly choose report type when Sun Path is selected
+    if selected_parameter == "Sun Path":
+        report_type = st.radio(
+            "Report Type:",
+            options=["Climate Report", "Shading Report"],
+            horizontal=True,
+            key="report_type_selector",
+            label_visibility="collapsed",
+        )
+        _is_shading = report_type == "Shading Report"
+    else:
+        _is_shading = False
 
     try:
         _year   = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
