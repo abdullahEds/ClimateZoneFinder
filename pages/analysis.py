@@ -462,7 +462,7 @@ with col_left:
     if "end_month_idx" not in st.session_state:
         st.session_state.end_month_idx = 11
 
-    month_col1, month_col2, month_col3= st.columns([1, 1, 0.9], gap="small")
+    month_col1, month_col2, month_col3= st.columns([1, 1, 0.8], gap="small")
 
     with month_col1:
         start_month = st.selectbox(
