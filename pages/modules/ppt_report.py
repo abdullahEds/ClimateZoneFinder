@@ -595,16 +595,18 @@ def generate_pptx_report(
                 if shading_fig is not None:
                     tmp_shading = _save_mpl_figure(shading_fig)
                     plt.close(shading_fig)
+                    diagram_width = (SW - 0.54) * 0.45
                     slide.shapes.add_picture(tmp_shading, Inches(0.27), Inches(0.75),
-                                           width=Inches(3.5), height=Inches(5.0))
+                                           width=Inches(diagram_width), height=Inches(5.8))
                     os.unlink(tmp_shading)
                     diagram_added = True
             except Exception as e:
                 print(f"Shading diagram error: {e}")
 
         if diagram_added:
-            text_left = 3.9
-            text_width = SW - text_left - 0.27
+            diagram_width = (SW - 0.54) * 0.45
+            text_left = 0.27 + diagram_width
+            text_width = (SW - 0.54) * 0.55
             tb = slide.shapes.add_textbox(Inches(text_left), Inches(0.80),
                                           Inches(text_width), Inches(5.8))
         else:
