@@ -48,6 +48,21 @@ def parse_location_parameter():
 # Get location components from URL if provided
 url_location_params = parse_location_parameter()
 
+def initialize_session_from_url(url_params):
+    """Initialize session state from URL parameters if they exist."""
+    if url_params.get("country"):
+        st.session_state.country = url_params["country"]
+    
+    if url_params.get("location"):
+        st.session_state.location = url_params["location"]
+    
+    if url_params.get("state"):
+        st.session_state.state = url_params["state"]
+
+# Initialize session state from URL parameters
+if any(url_location_params.values()):
+    initialize_session_from_url(url_location_params)
+
 
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
@@ -1252,16 +1267,20 @@ with left_col:
         st.markdown('<div class="label-text">Country</div>', unsafe_allow_html=True)
         countries = sorted(df["Country"].unique())
         country_index = 0
-        if url_location_params["country"] and url_location_params["country"] in countries:
-            country_index = countries.tolist().index(url_location_params["country"])
+        # Use session state value if available, otherwise use URL param
+        current_country = st.session_state.get("country") or url_location_params["country"]
+        if current_country and current_country in countries:
+            country_index = countries.tolist().index(current_country)
         selected_country = st.selectbox("Country", countries, index=country_index, key="country", label_visibility="collapsed", width=250)
 
         # Location
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["Country"] == selected_country]["Location"].unique())
         location_index = 0
-        if url_location_params["location"] and url_location_params["location"] in locations:
-            location_index = locations.tolist().index(url_location_params["location"])
+        # Use session state value if available, otherwise use URL param
+        current_location = st.session_state.get("location") or url_location_params["location"]
+        if current_location and current_location in locations:
+            location_index = locations.tolist().index(current_location)
         selected_location = st.selectbox("Location", locations, index=location_index, key="location", label_visibility="collapsed", width=250)
 
         # Climate Zone
@@ -1340,17 +1359,19 @@ with left_col:
         st.markdown('<div class="label-text">State</div>', unsafe_allow_html=True)
         states = sorted(df["State"].unique())
 
-        # Default state selection - use URL param if provided, else use "Delhi"
-        default_state = url_location_params["state"] if url_location_params["state"] else "Delhi"        
-        default_index = states.index(default_state) if default_state in states else 0
+        # Use session state value if available, otherwise use URL param, or default to "Delhi"
+        current_state = st.session_state.get("state") or url_location_params["state"] or "Delhi"
+        default_index = states.index(current_state) if current_state in states else 0
 
         selected_state = st.selectbox("State", states, index=default_index, key="state", label_visibility="collapsed", width=300)
         
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["State"] == selected_state]["Location"].unique())
         location_index = 0
-        if url_location_params["location"] and url_location_params["location"] in locations:
-            location_index = locations.tolist().index(url_location_params["location"])
+        # Use session state value if available, otherwise use URL param
+        current_location = st.session_state.get("nbc_location") or url_location_params["location"]
+        if current_location and current_location in locations:
+            location_index = locations.tolist().index(current_location)
         selected_location = st.selectbox("Location", locations, index=location_index, key="nbc_location", label_visibility="collapsed", width=300)
         
         result = df[(df["State"] == selected_state) & (df["Location"] == selected_location)]
