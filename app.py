@@ -1251,21 +1251,19 @@ with left_col:
         # Country
         st.markdown('<div class="label-text">Country</div>', unsafe_allow_html=True)
         countries = sorted(df["Country"].unique())
-        country_list = countries.tolist()
         country_index = 0
         # Use URL param if provided and exists in list
-        if url_location_params["country"] and url_location_params["country"] in country_list:
-            country_index = country_list.index(url_location_params["country"])
+        if url_location_params["country"] and url_location_params["country"] in countries:
+            country_index = countries.index(url_location_params["country"])
         selected_country = st.selectbox("Country", countries, index=country_index, key="country", label_visibility="collapsed", width=250)
 
         # Location
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["Country"] == selected_country]["Location"].unique())
-        location_list = locations.tolist()
         location_index = 0
         # Use URL param if provided and exists in current country's locations
-        if url_location_params["location"] and url_location_params["location"] in location_list:
-            location_index = location_list.index(url_location_params["location"])
+        if url_location_params["location"] and url_location_params["location"] in locations:
+            location_index = locations.index(url_location_params["location"])
         selected_location = st.selectbox("Location", locations, index=location_index, key="location", label_visibility="collapsed", width=250)
 
         # Climate Zone
@@ -1343,21 +1341,19 @@ with left_col:
 
         st.markdown('<div class="label-text">State</div>', unsafe_allow_html=True)
         states = sorted(df["State"].unique())
-        state_list = states.tolist()
 
         # Default state selection - use URL param if provided and valid, else use "Delhi"
-        default_state = url_location_params["state"] if (url_location_params["state"] and url_location_params["state"] in state_list) else "Delhi"
-        default_index = state_list.index(default_state) if default_state in state_list else 0
+        default_state = url_location_params["state"] if (url_location_params["state"] and url_location_params["state"] in states) else "Delhi"
+        default_index = states.index(default_state) if default_state in states else 0
 
         selected_state = st.selectbox("State", states, index=default_index, key="state", label_visibility="collapsed", width=300)
         
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["State"] == selected_state]["Location"].unique())
-        location_list = locations.tolist()
         location_index = 0
         # Use URL param if provided and exists in current state's locations
-        if url_location_params["location"] and url_location_params["location"] in location_list:
-            location_index = location_list.index(url_location_params["location"])
+        if url_location_params["location"] and url_location_params["location"] in locations:
+            location_index = locations.index(url_location_params["location"])
         selected_location = st.selectbox("Location", locations, index=location_index, key="nbc_location", label_visibility="collapsed", width=300)
         
         result = df[(df["State"] == selected_state) & (df["Location"] == selected_location)]
