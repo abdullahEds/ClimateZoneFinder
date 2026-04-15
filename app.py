@@ -19,6 +19,16 @@ st.set_page_config(
 )
 
 
+# Access URL query parameters
+def get_location_from_url():
+    """Get location parameter from URL query string."""
+    query_params = st.query_params
+    return query_params.get("location", None)
+
+# Get location from URL if provided
+url_location = get_location_from_url()
+
+
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
@@ -1226,7 +1236,8 @@ with left_col:
         # Location
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["Country"] == selected_country]["Location"].unique())
-        selected_location = st.selectbox("Location", locations, key="location", label_visibility="collapsed", width=250)
+        location_index = locations.tolist().index(url_location) if url_location and url_location in locations else 0
+        selected_location = st.selectbox("Location", locations, index=location_index, key="location", label_visibility="collapsed", width=250)
 
         # Climate Zone
         result = df[(df["Country"] == selected_country) & (df["Location"] == selected_location)]
@@ -1312,7 +1323,8 @@ with left_col:
         
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["State"] == selected_state]["Location"].unique())
-        selected_location = st.selectbox("Location", locations, key="nbc_location", label_visibility="collapsed", width=300)
+        location_index = locations.tolist().index(url_location) if url_location and url_location in locations else 0
+        selected_location = st.selectbox("Location", locations, index=location_index, key="nbc_location", label_visibility="collapsed", width=300)
         
         result = df[(df["State"] == selected_state) & (df["Location"] == selected_location)]
         
