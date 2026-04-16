@@ -8,6 +8,9 @@ import os
 from datetime import datetime
 from typing import Optional
 import sys
+from fastapi.middleware.cors import CORSMiddleware
+
+
 
 # Add the pages directory and modules path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +28,17 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:5500",
+        "http://localhost:5500"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def parse_epw_file(file_content: bytes) -> tuple[pd.DataFrame, dict]:
     """Parse EPW file and extract weather data and metadata."""
