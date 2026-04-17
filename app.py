@@ -19,6 +19,36 @@ st.set_page_config(
 )
 
 
+# Access URL query parameters
+def parse_location_parameter():
+    """Parse location parameter from URL query string.
+    
+    Expected format: "Location, State/Province, Country" or "Location, Country"
+    Returns: dict with 'location', 'state', and 'country' keys
+    """
+    query_params = st.query_params
+    location_param = query_params.get("location", None)
+    
+    if not location_param:
+        return {"location": None, "state": None, "country": None}
+    
+    # Split by comma and strip whitespace
+    parts = [p.strip() for p in location_param.split(",")]
+    
+    if len(parts) == 3:
+        # Format: Location, State, Country
+        return {"location": parts[0], "state": parts[1], "country": parts[2]}
+    elif len(parts) == 2:
+        # Format: Location, Country
+        return {"location": parts[0], "state": None, "country": parts[1]}
+    else:
+        # Just location name
+        return {"location": parts[0] if parts else None, "state": None, "country": None}
+
+# Get location components from URL if provided
+url_location_params = parse_location_parameter()
+
+
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
@@ -243,6 +273,41 @@ st.markdown("""
         line-height: 1.5;
         padding: 0 10px;
         text-align: justify;
+    }
+    /* Standardize button appearance so text fits and layout is consistent */
+    div.stButton, div.stDownloadButton { display: flex !important; justify-content: center !important; }
+    div.stButton > button, div.stDownloadButton > button,
+    a.stLinkButton, a.stLinkButton > button, button[data-baseweb="button"] {
+        padding: 8px 14px !important;
+        font-size: 14px !important;
+        line-height: 1.2 !important;
+        white-space: normal !important;
+        word-break: break-word !important;
+        min-width: 200px !important;
+        max-width: 260px !important;
+        width: auto !important;
+        min-height: 40px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        box-sizing: border-box !important;
+        margin-bottom: 12px !important;
+    }
+
+    /* Link buttons (download links) look like buttons */
+    a.stLinkButton {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 8px 14px !important;
+        text-decoration: none !important;
+        color: inherit !important;
+        background: transparent !important;
+        border-radius: 8px !important;
+        margin-bottom: 18px !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -1186,12 +1251,20 @@ with left_col:
         # Country
         st.markdown('<div class="label-text">Country</div>', unsafe_allow_html=True)
         countries = sorted(df["Country"].unique())
-        selected_country = st.selectbox("Country", countries, key="country", label_visibility="collapsed", width=250)
+        country_index = 0
+        # Use URL param if provided and exists in list
+        if url_location_params["country"] and url_location_params["country"] in countries:
+            country_index = countries.index(url_location_params["country"])
+        selected_country = st.selectbox("Country", countries, index=country_index, key="country", label_visibility="collapsed", width=250)
 
         # Location
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["Country"] == selected_country]["Location"].unique())
-        selected_location = st.selectbox("Location", locations, key="location", label_visibility="collapsed", width=250)
+        location_index = 0
+        # Use URL param if provided and exists in current country's locations
+        if url_location_params["location"] and url_location_params["location"] in locations:
+            location_index = locations.index(url_location_params["location"])
+        selected_location = st.selectbox("Location", locations, index=location_index, key="location", label_visibility="collapsed", width=250)
 
         # Climate Zone
         result = df[(df["Country"] == selected_country) & (df["Location"] == selected_location)]
@@ -1243,11 +1316,14 @@ with left_col:
         if not result.empty and pd.notna(result.iloc[0].get("EPW File", None)):
             epw_url = result.iloc[0]["EPW File"]
             if epw_url and str(epw_url).strip() != "" and str(epw_url) != "0":
-                st.link_button("Download EPW", epw_url, type="secondary", width=200)
+                st.link_button("Download EPW", epw_url, type="primary", width=200)
+                if st.button("Analyze in Dashboard", key="analyze_epw_ashrae", width=200, type="secondary"):
+                    st.session_state["epw_url"] = epw_url
+                    st.switch_page("pages/analysis.py")
             else:
-                st.button("Download EPW", type="secondary", disabled=True, width=200)
+                st.button("Download EPW", type="primary", disabled=True, width=200)
         else:
-            st.button("Download EPW", type="secondary", disabled=True, width=200)
+            st.button("Download EPW", type="primary", disabled=True, width=200)
         if report_clicked and not result.empty:
             st.info("Report generation for ASHRAE is under development. Please check back soon.")
 
@@ -1266,15 +1342,19 @@ with left_col:
         st.markdown('<div class="label-text">State</div>', unsafe_allow_html=True)
         states = sorted(df["State"].unique())
 
-        # Default state selection
-        default_state = "Delhi"        
+        # Default state selection - use URL param if provided and valid, else use "Delhi"
+        default_state = url_location_params["state"] if (url_location_params["state"] and url_location_params["state"] in states) else "Delhi"
         default_index = states.index(default_state) if default_state in states else 0
 
         selected_state = st.selectbox("State", states, index=default_index, key="state", label_visibility="collapsed", width=300)
         
         st.markdown('<div class="label-text">Location</div>', unsafe_allow_html=True)
         locations = sorted(df[df["State"] == selected_state]["Location"].unique())
-        selected_location = st.selectbox("Location", locations, key="nbc_location", label_visibility="collapsed", width=300)
+        location_index = 0
+        # Use URL param if provided and exists in current state's locations
+        if url_location_params["location"] and url_location_params["location"] in locations:
+            location_index = locations.index(url_location_params["location"])
+        selected_location = st.selectbox("Location", locations, index=location_index, key="nbc_location", label_visibility="collapsed", width=300)
         
         result = df[(df["State"] == selected_state) & (df["Location"] == selected_location)]
         
@@ -1295,11 +1375,14 @@ with left_col:
         if not result.empty and pd.notna(result.iloc[0].get("EPW File", None)):
             epw_url = result.iloc[0]["EPW File"]
             if epw_url and str(epw_url).strip() != "" and str(epw_url) != "0":
-                st.link_button("Download EPW", epw_url, type="secondary", width=200)
+                st.link_button("Download EPW", epw_url, type="primary", width=200)
+                if st.button("Analyze in Dashboard", key="analyze_epw_nbc", width=200, type="secondary"):
+                    st.session_state["epw_url"] = epw_url
+                    st.switch_page("pages/analysis.py")
             else:
-                st.link_button("Download EPW", type="secondary", disabled=True, width=200)
+                st.link_button("Download EPW", type="primary", disabled=True, width=200)
         else:
-            st.link_button("Download EPW", type="secondary", disabled=True, width=200)
+            st.link_button("Download EPW", type="primary", disabled=True, width=200)
         
         # report_clicked and not result.empty:
         epw_file = result.iloc[0].get("EPW File", "Not Available")

@@ -595,16 +595,18 @@ def generate_pptx_report(
                 if shading_fig is not None:
                     tmp_shading = _save_mpl_figure(shading_fig)
                     plt.close(shading_fig)
+                    diagram_width = (SW - 0.54) * 0.45
                     slide.shapes.add_picture(tmp_shading, Inches(0.27), Inches(0.75),
-                                           width=Inches(3.5), height=Inches(5.0))
+                                           width=Inches(diagram_width), height=Inches(5.8))
                     os.unlink(tmp_shading)
                     diagram_added = True
             except Exception as e:
                 print(f"Shading diagram error: {e}")
 
         if diagram_added:
-            text_left = 3.9
-            text_width = SW - text_left - 0.27
+            diagram_width = (SW - 0.54) * 0.45
+            text_left = 0.27 + diagram_width
+            text_width = (SW - 0.54) * 0.55
             tb = slide.shapes.add_textbox(Inches(text_left), Inches(0.80),
                                           Inches(text_width), Inches(5.8))
         else:
@@ -1019,14 +1021,69 @@ def generate_shading_pptx_report(
             sol = _sp.get_solarposition(times, _lat, _lon)
             sol = sol[sol["apparent_elevation"] > 0].copy()
 
-            epw = df.set_index("datetime").copy()
+            # Robust EPW handling: ensure datetime, map common aliases, and resample half-hour to hourly
+            _df = df.copy()
+            if "datetime" not in _df.columns:
+                if isinstance(_df.index, pd.DatetimeIndex):
+                    _df = _df.reset_index().rename(columns={_df.index.name or "index": "datetime"})
+                else:
+                    raise ValueError("EPW missing 'datetime' column")
+
+            common_aliases = {
+                'dni': 'direct_normal_irradiance',
+                'direct normal': 'direct_normal_irradiance',
+                'direct_normal': 'direct_normal_irradiance',
+                'dhi': 'diffuse_horizontal_irradiance',
+                'diffuse horizontal': 'diffuse_horizontal_irradiance',
+                'ghi': 'global_horizontal_irradiance',
+                'global horizontal': 'global_horizontal_irradiance',
+                'dry bulb': 'dry_bulb_temperature',
+                'dry_bulb': 'dry_bulb_temperature',
+                'drybulb': 'dry_bulb_temperature',
+                'temperature': 'dry_bulb_temperature',
+                'temp': 'dry_bulb_temperature',
+            }
+
+            cols_lower = {c: c.lower() for c in _df.columns}
+            rename_map = {}
+            for alias, target in common_aliases.items():
+                if target in _df.columns:
+                    continue
+                for orig, low in cols_lower.items():
+                    if alias == low or alias in low:
+                        if orig != 'datetime' and target not in _df.columns:
+                            rename_map[orig] = target
+                            break
+
+            if rename_map:
+                _df = _df.rename(columns=rename_map)
+
+            epw = _df.set_index("datetime").copy()
             if epw.index.tz is None:
                 epw.index = epw.index.tz_localize(tz)
             else:
                 epw.index = epw.index.tz_convert(tz)
             epw.index = epw.index.map(lambda x: x.replace(year=2020))
 
-            sol = sol.join(epw[["dry_bulb_temperature", "global_horizontal_irradiance"]], how="left")
+            # Resample half-hour EPW to hourly for consistent join
+            try:
+                has_half_hour = any(t.minute != 0 for t in epw.index)
+            except Exception:
+                has_half_hour = False
+
+            epw_hourly = epw
+            if has_half_hour:
+                candidate_cols = [c for c in [
+                    "dry_bulb_temperature", "direct_normal_irradiance",
+                    "diffuse_horizontal_irradiance", "global_horizontal_irradiance"
+                ] if c in epw.columns]
+                if candidate_cols:
+                    epw_num = epw[candidate_cols].apply(pd.to_numeric, errors='coerce')
+                    epw_hourly = epw_num.resample('h').mean().dropna(how='all')
+                else:
+                    epw_hourly = epw.resample('h').first().dropna(how='all')
+
+            sol = sol.join(epw_hourly[["dry_bulb_temperature", "global_horizontal_irradiance"]], how="left")
             sol["global_horizontal_irradiance"] = sol["global_horizontal_irradiance"].fillna(0)
             sol["dry_bulb_temperature"] = sol["dry_bulb_temperature"].fillna(
                 sol["dry_bulb_temperature"].median()
