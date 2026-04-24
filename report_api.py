@@ -1,6 +1,6 @@
 """FastAPI server for generating PowerPoint climate analysis reports from EPW files."""
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Form
 from fastapi.responses import StreamingResponse
 import pandas as pd
 import io
@@ -21,6 +21,7 @@ sys.path.insert(0, pages_dir)
 sys.path.insert(0, modules_dir)
 
 from pages.modules.ppt_report import generate_pptx_report, generate_shading_pptx_report
+from pages.modules.combined_report import generate_combined_pptx_report
 
 app = FastAPI(
     title="Climate Zone Finder - PPT Report API",
@@ -260,6 +261,91 @@ async def generate_shading_report(
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
 
+@app.post("/api/reports/combined-analysis")
+async def generate_combined_report(
+    file: UploadFile = File(...),
+    start_date: Optional[str] = Form(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Form(None, description="End date (YYYY-MM-DD)"),
+    start_hour: int = Form(0, description="Start hour (0-23), default: 0 (full day)"),
+    end_hour: int = Form(23, description="End hour (0-23), default: 23 (full day)"),
+    temp_threshold: float = Form(28.0, description="Temperature threshold (°C), default: 28.0"),
+    rad_threshold: float = Form(315.0, description="Radiation threshold (W/m²), default: 315.0"),
+    design_cutoff_angle: float = Form(45.0, description="Design cutoff angle (°), default: 45.0"),
+):
+    """
+    Generate a combined Climate & Shading Analysis PowerPoint report from an EPW file.
+    
+    This endpoint generates a comprehensive report with:
+    - Cover slide with location info
+    - Assumptions & Analysis Parameters slide (customizable thresholds)
+    - Climate Analysis: Dry Bulb Temperature, Relative Humidity, Sun Path
+    - Shading Analysis: Thermal/Radiation Matrix, Sun Path Shading, Orientation Analysis, Shading Masks
+    - Annexure with disclaimer and acknowledgements
+    
+    Parameters:
+    - file: EPW weather file (required)
+    - start_date: Start analysis date in YYYY-MM-DD format (optional, default: first day in file)
+    - end_date: End analysis date in YYYY-MM-DD format (optional, default: last day in file)
+    - start_hour: Start hour of analysis (0-23, default: 0 - full day)
+    - end_hour: End hour of analysis (0-23, default: 23 - full day)
+    - temp_threshold: Temperature threshold for overheating detection (°C, default: 28.0)
+    - rad_threshold: Solar radiation threshold for shading analysis (W/m², default: 315.0)
+    - design_cutoff_angle: Vertical design angle for shading calculations (°, default: 45.0)
+    
+    Returns: PowerPoint report file with combined climate and shading analysis
+    """
+    try:
+        # Read uploaded file
+        content = await file.read()
+        
+        # Parse EPW
+        df, metadata = parse_epw_file(content)
+        
+        if df.empty:
+            raise ValueError("EPW file is empty or could not be parsed")
+        
+        # Set date range - default to full year (Jan 1 - Dec 31)
+        _year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
+        
+        if start_date is None:
+            start_dt = pd.to_datetime(f"{_year}-01-01").date()
+        else:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+        
+        if end_date is None:
+            end_dt = pd.to_datetime(f"{_year}-12-31").date()
+        else:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        # Generate combined report
+        pptx_buffer = generate_combined_pptx_report(
+            df=df,
+            start_date=start_dt,
+            end_date=end_dt,
+            start_hour=start_hour,
+            end_hour=end_hour,
+            selected_parameter="combined",
+            metadata=metadata,
+            temp_threshold=temp_threshold,
+            rad_threshold=rad_threshold,
+            design_cutoff_angle=design_cutoff_angle,
+        )
+        
+        city = metadata.get('city', 'Combined_Report')
+        filename = f"Climate_Shading_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+        
+        return StreamingResponse(
+            iter([pptx_buffer.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+
 @app.get("/api/docs")
 def api_documentation():
     """API documentation."""
@@ -294,11 +380,28 @@ def api_documentation():
                     "rad_threshold": "Radiation threshold in W/m² (default: 315.0)",
                     "design_cutoff_angle": "Design cutoff angle in degrees (default: 45.0)"
                 }
+            },
+            "combined_analysis_report": {
+                "method": "POST",
+                "path": "/api/reports/combined-analysis",
+                "description": "Generate combined Climate & Shading Analysis PowerPoint report from EPW file (Comprehensive Report)",
+                "parameters": {
+                    "file": "EPW weather file (required)",
+                    "start_date": "Start date in YYYY-MM-DD format (optional, default: first day in file)",
+                    "end_date": "End date in YYYY-MM-DD format (optional, default: last day in file)",
+                    "start_hour": "Start hour 0-23 (default: 0 - full day)",
+                    "end_hour": "End hour 0-23 (default: 23 - full day)",
+                    "temp_threshold": "Temperature threshold in °C for overheating (default: 28.0)",
+                    "rad_threshold": "Radiation threshold in W/m² (default: 315.0)",
+                    "design_cutoff_angle": "Design cutoff angle in degrees (default: 45.0)"
+                }
             }
         },
         "examples": {
-            "climate_analysis": "curl -X POST 'http://localhost:8000/api/reports/climate-analysis' -F 'file=@weather.epw' -o report.pptx",
-            "shading_analysis": "curl -X POST 'http://localhost:8000/api/reports/shading-analysis' -F 'file=@weather.epw' -o shading_report.pptx"
+            "climate_analysis": "curl -X POST 'http://localhost:8001/api/reports/climate-analysis' -F 'file=@weather.epw' -o report.pptx",
+            "shading_analysis": "curl -X POST 'http://localhost:8001/api/reports/shading-analysis' -F 'file=@weather.epw' -o shading_report.pptx",
+            "combined_analysis_default": "curl -X POST 'http://localhost:8001/api/reports/combined-analysis' -F 'file=@weather.epw' -o combined_report.pptx",
+            "combined_analysis_custom": "curl -X POST 'http://localhost:8001/api/reports/combined-analysis' -F 'file=@weather.epw' -G -d 'temp_threshold=26' -d 'rad_threshold=300' -d 'design_cutoff_angle=50' -o combined_report.pptx"
         }
     }
 
