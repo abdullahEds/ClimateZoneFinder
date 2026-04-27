@@ -4,6 +4,7 @@ import io
 import os
 import tempfile
 from datetime import datetime
+from tkinter import SW
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -556,6 +557,97 @@ def generate_combined_pptx_report(
     _make_rh_monthly_slide()
 
     # ── SECTION 3 – SUN PATH ──────────────────────────────────────────────────
+    # def _make_sun_path_slide():
+        # slide = prs.slides.add_slide(BLANK_LAYOUT)
+        # _add_slide_title(slide, "Sun Path Diagram")
+        # _add_divider(slide, 0.62)
+
+        # _meta = metadata or {}
+        # lat = _meta.get("latitude")
+        # lon = _meta.get("longitude")
+        # tz_str = _meta.get("timezone", "UTC")
+
+        # if lat is None or lon is None:
+        #     _err_box(slide, "Latitude/Longitude not available from EPW metadata.")
+        #     _add_logo(slide)
+        #     return
+
+        # try:
+        #     from pvlib import solarposition as _solpos_lib
+
+        #     try:
+        #         _tz = pytz.timezone(tz_str)
+        #     except Exception:
+        #         _tz = pytz.UTC
+
+        #     times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left")
+        #     sol = _solpos_lib.get_solarposition(times, lat, lon)
+        #     sol = sol[sol["apparent_elevation"] > 0].copy()
+        #     sol["r"] = 90 - sol["apparent_elevation"]
+
+        #     fig = plt.figure(figsize=(9, 7.5), dpi=130, facecolor='white')
+        #     ax = fig.add_subplot(111, projection='polar')
+        #     ax.set_theta_zero_location('N')
+        #     ax.set_theta_direction(-1)
+        #     ax.set_aspect('equal', adjustable='box')
+        #     ax.set_ylim(0, 90)
+        #     ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
+        #     ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
+        #                        fontsize=7, color='#555')
+        #     ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
+        #     ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=10, fontweight='bold')
+        #     ax.set_facecolor('#F0F4F8')
+        #     ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
+
+        #     sc = ax.scatter(
+        #         np.radians(sol["azimuth"].values),
+        #         sol["r"].values,
+        #         c=sol.index.dayofyear,
+        #         cmap='YlOrRd',
+        #         s=1.0, alpha=0.55,
+        #         vmin=1, vmax=365,
+        #         linewidths=0, zorder=2,
+        #     )
+        #     cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.75)
+        #     cbar.set_label('Day of Year', fontsize=9)
+        #     cbar.set_ticks([1, 91, 182, 273, 365])
+        #     cbar.set_ticklabels(['1\n(Jan)', '91\n(Apr)', '182\n(Jul)', '273\n(Oct)', '365\n(Dec)'])
+
+        #     key_dates = [
+        #         ("Mar 21 (Spring Equinox)", "2020-03-21", "#FF9500", 1.6),
+        #         ("Jun 21 (Summer Solstice)", "2020-06-21", "#CC0000", 2.0),
+        #         ("Dec 21 (Winter Solstice)", "2020-12-21", "#0066CC", 2.0),
+        #     ]
+        #     for lbl, dstr, col, lw in key_dates:
+        #         dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
+        #         ks = _solpos_lib.get_solarposition(dt, lat, lon)
+        #         ks = ks[ks["apparent_elevation"] > 0]
+        #         if not ks.empty:
+        #             ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
+        #                     color=col, linewidth=lw, label=lbl, zorder=4)
+
+        #     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.06), ncol=3,
+        #               frameon=True, fontsize=8, borderaxespad=0)
+        #     ax.set_title(f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
+        #                  fontsize=11, fontweight='bold', color='#333', pad=14)
+
+        #     plt.tight_layout()
+        #     tmp = _save_mpl_figure(fig)
+        #     plt.close(fig)
+
+        #     # Use square dimensions to maintain circular aspect ratio
+        #     # img_size = min(SW * 0.55, SH * 0.75)
+        #     # img_l = (SW - img_size) / 2
+        #     img_size = min(SW*0.85 , SH*.75 )
+        #     img_l = (SW - img_size) / 2
+        #     img_t = 0.72
+        #     slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_size), height=Inches(img_size))
+        #     os.unlink(tmp)
+
+        # except Exception as e:
+        #     _err_box(slide, e)
+
+        # _add_logo(slide)
     def _make_sun_path_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _add_slide_title(slide, "Sun Path Diagram")
@@ -584,67 +676,117 @@ def generate_combined_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            fig = plt.figure(figsize=(8.5, 7.2), dpi=130, facecolor='white')
+            # ---------- FIGURE ----------
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
+
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
+
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
-            ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
-                               fontsize=7, color='#555')
+            ax.set_yticklabels(
+                ['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
+                fontsize=7, color='#555'
+            )
+
             ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
-            ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=10, fontweight='bold')
+            ax.set_xticklabels(
+                ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
+                fontsize=10, fontweight='bold'
+            )
+
             ax.set_facecolor('#F0F4F8')
             ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
 
+            # ---------- SCATTER ----------
             sc = ax.scatter(
                 np.radians(sol["azimuth"].values),
                 sol["r"].values,
                 c=sol.index.dayofyear,
                 cmap='YlOrRd',
-                s=1.0, alpha=0.55,
-                vmin=1, vmax=365,
-                linewidths=0, zorder=2,
+                s=1.0,
+                alpha=0.55,
+                vmin=1,
+                vmax=365,
+                linewidths=0,
+                zorder=2,
             )
-            cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.75)
+
+            # ---------- COLORBAR ----------
+            cbar = fig.colorbar(sc, ax=ax, pad=0.08, fraction=0.035, shrink=0.8)
             cbar.set_label('Day of Year', fontsize=9)
             cbar.set_ticks([1, 91, 182, 273, 365])
             cbar.set_ticklabels(['1\n(Jan)', '91\n(Apr)', '182\n(Jul)', '273\n(Oct)', '365\n(Dec)'])
 
+            # ---------- KEY DATES ----------
             key_dates = [
                 ("Mar 21 (Spring Equinox)", "2020-03-21", "#FF9500", 1.6),
                 ("Jun 21 (Summer Solstice)", "2020-06-21", "#CC0000", 2.0),
                 ("Dec 21 (Winter Solstice)", "2020-12-21", "#0066CC", 2.0),
             ]
+
             for lbl, dstr, col, lw in key_dates:
                 dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
                 ks = _solpos_lib.get_solarposition(dt, lat, lon)
                 ks = ks[ks["apparent_elevation"] > 0]
+
                 if not ks.empty:
-                    ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
-                            color=col, linewidth=lw, label=lbl, zorder=4)
+                    ax.plot(
+                        np.radians(ks["azimuth"]),
+                        90 - ks["apparent_elevation"],
+                        color=col,
+                        linewidth=lw,
+                        label=lbl,
+                        zorder=4
+                    )
 
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.06), ncol=3,
-                      frameon=True, fontsize=8, borderaxespad=0)
-            ax.set_title(f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
-                         fontsize=11, fontweight='bold', color='#333', pad=14)
+            # ---------- LEGEND ----------
+            ax.legend(
+                loc='upper center',
+                bbox_to_anchor=(0.5, -0.08),
+                ncol=3,
+                frameon=True,
+                fontsize=8
+            )
 
-            plt.tight_layout()
+            # ---------- TITLE ----------
+            ax.set_title(
+                f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
+                fontsize=11,
+                fontweight='bold',
+                color='#333',
+                pad=14
+            )
+
+            # ---------- LAYOUT FIX (CRITICAL) ----------
+            plt.tight_layout(pad=2.5)
+            fig.subplots_adjust(left=0.08, right=0.88, top=0.92, bottom=0.12)
+
+            # ---------- SAVE ----------
             tmp = _save_mpl_figure(fig)
             plt.close(fig)
 
-            img_w = SW * 0.62
-            img_h = SH * 0.83
-            img_l = (SW - img_w) / 2
+            # ---------- PPT IMAGE PLACEMENT ----------
+            img_size = min(SW * 0.75, SH * 0.75)   # square, no distortion
+            img_l = (SW - img_size) / 2
             img_t = 0.72
-            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_w), height=Inches(img_h))
+
+            slide.shapes.add_picture(
+                tmp,
+                Inches(img_l),
+                Inches(img_t),
+                width=Inches(img_size),
+                height=Inches(img_size)
+            )
+
             os.unlink(tmp)
 
         except Exception as e:
             _err_box(slide, e)
 
         _add_logo(slide)
-
     _make_sun_path_slide()
 
     # ── SECTION 4 – THERMAL & RADIATION MATRIX (Shading) ────────────────────
@@ -793,10 +935,11 @@ def generate_combined_pptx_report(
                 (sol["global_horizontal_irradiance"] > rad_threshold)
             )
 
-            fig = plt.figure(figsize=(9, 7.2), dpi=130, facecolor="white")
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor="white")
             ax = fig.add_subplot(111, projection="polar")
             ax.set_theta_zero_location("N")
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(["90°","75°","60°","45°","30°","15°","0°"],
@@ -841,11 +984,11 @@ def generate_combined_pptx_report(
             tmp = _save_mpl_figure(fig)
             plt.close(fig)
 
-            iw = SW * 0.58
-            ih = SH * 0.84
-            il = (SW - iw) / 2
-            slide.shapes.add_picture(tmp, Inches(il), Inches(0.72),
-                                     width=Inches(iw), height=Inches(ih))
+            # Use square dimensions to maintain circular aspect ratio
+            img_size = min(SW * 0.75, SH * 0.75)
+            img_l = (SW - img_size) / 2
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(0.72),
+                                     width=Inches(img_size), height=Inches(img_size))
             os.unlink(tmp)
 
         except Exception as e:

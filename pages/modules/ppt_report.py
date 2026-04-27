@@ -440,10 +440,11 @@ def generate_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            fig = plt.figure(figsize=(8.5, 7.2), dpi=130, facecolor='white')
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
@@ -489,11 +490,11 @@ def generate_pptx_report(
             tmp = _save_mpl_figure(fig)
             plt.close(fig)
 
-            img_w = SW * 0.62
-            img_h = SH * 0.83
-            img_l = (SW - img_w) / 2
+            # Use square dimensions to maintain circular aspect ratio
+            img_size = min(SW * 0.55, SH * 0.75)
+            img_l = (SW - img_size) / 2
             img_t = 0.72
-            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_w), height=Inches(img_h))
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_size), height=Inches(img_size))
             os.unlink(tmp)
 
         except Exception as e:
@@ -519,10 +520,12 @@ def generate_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            fig = plt.figure(figsize=(8.0, 7.0), dpi=130, facecolor='white')
+            # fig = plt.figure(figsize=(8.0, 7.0), dpi=130, facecolor='white')
+            fig = plt.figure(figsize=(7.0, 7.0), dpi=130, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(['90°', '75°', '60°', '45°', '30°', '15°', '0°'], fontsize=7, color='#555')
@@ -572,7 +575,8 @@ def generate_pptx_report(
             ax.set_title(f'Sun Path with Shading Profile\nLat: {lat:.2f}°  Lon: {lon:.2f}°',
                         fontsize=10, fontweight='bold', color='#333', pad=12)
 
-            plt.tight_layout()
+            # plt.tight_layout()
+            plt.subplots_adjust(top=0.88, bottom=0.12)
             return fig
         except Exception as e:
             print(f"Shading diagram error: {e}")
@@ -1093,10 +1097,11 @@ def generate_shading_pptx_report(
                 (sol["global_horizontal_irradiance"] > rad_threshold)
             )
 
-            fig = plt.figure(figsize=(9, 7.2), dpi=130, facecolor="white")
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor="white")
             ax = fig.add_subplot(111, projection="polar")
             ax.set_theta_zero_location("N")
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(["90\u00b0","75\u00b0","60\u00b0","45\u00b0","30\u00b0","15\u00b0","0\u00b0"],
@@ -1141,11 +1146,11 @@ def generate_shading_pptx_report(
             tmp = _save_fig(fig)
             plt.close(fig)
 
-            iw = SW * 0.58
-            ih = SH * 0.84
-            il = (SW - iw) / 2
-            slide.shapes.add_picture(tmp, Inches(il), Inches(0.72),
-                                     width=Inches(iw), height=Inches(ih))
+            # Use square dimensions to maintain circular aspect ratio
+            img_size = min(SW * 0.50, SH * 0.75)
+            img_l = (SW - img_size) / 2
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(0.72),
+                                     width=Inches(img_size), height=Inches(img_size))
             os.unlink(tmp)
 
         except Exception as e:
