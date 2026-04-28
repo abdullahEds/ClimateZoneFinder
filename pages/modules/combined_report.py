@@ -1,4 +1,4 @@
-"""Combined PowerPoint report generation - Climate + Shading Analysis."""
+"""Combined PowerPoint report generation - Climate + Shading + Wind Analysis."""
 
 import io
 import os
@@ -50,6 +50,7 @@ def generate_combined_pptx_report(
     temp_threshold: float = 28.0,
     rad_threshold: float = 315.0,
     design_cutoff_angle: float = 45.0,
+    n_sectors: int = 16,
 ):
     """Generate a combined PowerPoint report with Climate + Shading Analysis + Assumptions slide."""
 
@@ -1193,6 +1194,280 @@ def generate_combined_pptx_report(
         _add_logo(slide)
 
     _make_shading_masks_slide()
+
+    # ── SECTION 8 – WIND ANALYSIS SLIDES ──────────────────────────────────────
+    def _prepare_wind_slides():
+        """Prepare and add wind analysis slides."""
+        try:
+            from modules.wind_module import (
+                prepare_wind_data, compute_wind_rose, compute_wind_statistics,
+                plot_wind_rose, plot_speed_heatmap, plot_direction_heatmap,
+                plot_speed_histogram, plot_climate_bubble
+            )
+        except ImportError:
+            return  # Skip if wind module not available
+
+        # Prepare wind data
+        months = list(range(1, 13))  # All months
+        wdf = prepare_wind_data(df, months=months, n_sectors=n_sectors)
+
+        if wdf.empty:
+            return  # No wind data available
+
+        rose_df, calm_pct = compute_wind_rose(wdf, n_sectors, exclude_calm=False)
+        stats = compute_wind_statistics(wdf)
+
+        # ── Wind Rose Slide ─────────────────────────────────────────────────
+        def _wind_rose_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Rose Analysis")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_wind_rose(rose_df, calm_pct, n_sectors)
+                
+                # Convert Plotly to static image
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=600)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _wind_rose_slide()
+
+        # ── Wind Speed Heatmap Slide ────────────────────────────────────────
+        def _speed_heatmap_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Speed Heatmap (Day × Hour)")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_speed_heatmap(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=600)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _speed_heatmap_slide()
+
+        # ── Wind Direction Heatmap Slide ────────────────────────────────────
+        def _direction_heatmap_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Direction Heatmap (Day × Hour)")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_direction_heatmap(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=600)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _direction_heatmap_slide()
+
+        # ── Wind Speed Distribution Slide ───────────────────────────────────
+        def _speed_histogram_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Speed Distribution")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_speed_histogram(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=500)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _speed_histogram_slide()
+
+        # ── Climate Bubble Chart Slide ──────────────────────────────────────
+        def _climate_bubble_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Temperature – Humidity – Wind Speed")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_climate_bubble(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=650)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _climate_bubble_slide()
+
+        # ── Wind Statistics Summary Slide ───────────────────────────────────
+        def _wind_statistics_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Statistics Summary")
+            _add_divider(slide, 0.62)
+
+            try:
+                # Prepare statistics data with colors and icons
+                stats_data = [
+                    {
+                        "label": "Prevailing Direction",
+                        "value": stats.get("prevailing_direction", "N/A"),
+                        "color": RGBColor(0x3B, 0x82, 0xF6),  # Blue
+                        "bg_color": RGBColor(0xEF, 0xF6, 0xFF),  # Light blue
+                    },
+                    {
+                        "label": "Mean Wind Speed",
+                        "value": f"{stats.get('mean_speed', 0):.2f} m/s",
+                        "color": RGBColor(0x8B, 0x5C, 0xF6),  # Purple
+                        "bg_color": RGBColor(0xF5, 0xF3, 0xFF),  # Light purple
+                    },
+                    {
+                        "label": "Maximum Wind Speed",
+                        "value": f"{stats.get('max_speed', 0):.2f} m/s",
+                        "color": RGBColor(0xEF, 0x44, 0x44),  # Red
+                        "bg_color": RGBColor(0xFF, 0xF1, 0xF1),  # Light red
+                    },
+                    {
+                        "label": "Calm Hours",
+                        "value": f"{stats.get('calm_percent', 0):.1f}%",
+                        "color": RGBColor(0xF5, 0x9E, 0x0B),  # Amber
+                        "bg_color": RGBColor(0xFF, 0xF8, 0xE7),  # Light amber
+                    },
+                    {
+                        "label": "Strongest Direction",
+                        "value": stats.get("strongest_direction", "N/A"),
+                        "color": RGBColor(0x06, 0xB6, 0xD4),  # Cyan
+                        "bg_color": RGBColor(0xEC, 0xF8, 0xFE),  # Light cyan
+                    },
+                    {
+                        "label": "Total Data Points",
+                        "value": f"{len(wdf)} hours",
+                        "color": RGBColor(0x10, 0xB9, 0x81),  # Green
+                        "bg_color": RGBColor(0xF0, 0xFF, 0xF4),  # Light green
+                    },
+                ]
+
+                # Create 3x2 grid of cards
+                card_width = (SW - 0.8) / 3
+                card_height = 1.8
+                start_top = 0.75
+                start_left = 0.27
+
+                for idx, stat in enumerate(stats_data):
+                    col = idx % 3
+                    row = idx // 3
+                    
+                    left = start_left + col * (card_width + 0.05)
+                    top = start_top + row * (card_height + 0.15)
+
+                    # Add card background shape with border
+                    card = slide.shapes.add_shape(
+                        1,  # Rectangle
+                        Inches(left),
+                        Inches(top),
+                        Inches(card_width),
+                        Inches(card_height),
+                    )
+                    card.fill.solid()
+                    card.fill.fore_color.rgb = stat["bg_color"]
+                    card.line.color.rgb = stat["color"]
+                    card.line.width = Pt(2)
+
+                    # Add label
+                    label_tb = slide.shapes.add_textbox(
+                        Inches(left + 0.1),
+                        Inches(top + 0.1),
+                        Inches(card_width - 0.2),
+                        Inches(0.5),
+                    )
+                    label_tf = label_tb.text_frame
+                    label_tf.word_wrap = True
+                    p = label_tf.paragraphs[0]
+                    run = p.add_run()
+                    run.text = stat["label"]
+                    run.font.size = Pt(10)
+                    run.font.bold = True
+                    run.font.color.rgb = stat["color"]
+
+                    # Add value
+                    value_tb = slide.shapes.add_textbox(
+                        Inches(left + 0.1),
+                        Inches(top + 0.65),
+                        Inches(card_width - 0.2),
+                        Inches(0.9),
+                    )
+                    value_tf = value_tb.text_frame
+                    value_tf.word_wrap = True
+                    value_tf.vertical_anchor = 1  # Middle alignment
+                    p = value_tf.paragraphs[0]
+                    p.alignment = PP_ALIGN.CENTER
+                    run = p.add_run()
+                    run.text = stat["value"]
+                    run.font.size = Pt(16)
+                    run.font.bold = True
+                    run.font.color.rgb = DARK_GREY
+
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _wind_statistics_slide()
+
+    _prepare_wind_slides()
 
     # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
     def _make_annexure_slide():
