@@ -1,9 +1,10 @@
-"""Combined PowerPoint report generation - Climate + Shading Analysis."""
+"""Combined PowerPoint report generation - Climate + Shading + Wind Analysis."""
 
 import io
 import os
 import tempfile
 from datetime import datetime
+from tkinter import SW
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -49,6 +50,7 @@ def generate_combined_pptx_report(
     temp_threshold: float = 28.0,
     rad_threshold: float = 315.0,
     design_cutoff_angle: float = 45.0,
+    n_sectors: int = 16,
 ):
     """Generate a combined PowerPoint report with Climate + Shading Analysis + Assumptions slide."""
 
@@ -556,6 +558,97 @@ def generate_combined_pptx_report(
     _make_rh_monthly_slide()
 
     # ── SECTION 3 – SUN PATH ──────────────────────────────────────────────────
+    # def _make_sun_path_slide():
+        # slide = prs.slides.add_slide(BLANK_LAYOUT)
+        # _add_slide_title(slide, "Sun Path Diagram")
+        # _add_divider(slide, 0.62)
+
+        # _meta = metadata or {}
+        # lat = _meta.get("latitude")
+        # lon = _meta.get("longitude")
+        # tz_str = _meta.get("timezone", "UTC")
+
+        # if lat is None or lon is None:
+        #     _err_box(slide, "Latitude/Longitude not available from EPW metadata.")
+        #     _add_logo(slide)
+        #     return
+
+        # try:
+        #     from pvlib import solarposition as _solpos_lib
+
+        #     try:
+        #         _tz = pytz.timezone(tz_str)
+        #     except Exception:
+        #         _tz = pytz.UTC
+
+        #     times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left")
+        #     sol = _solpos_lib.get_solarposition(times, lat, lon)
+        #     sol = sol[sol["apparent_elevation"] > 0].copy()
+        #     sol["r"] = 90 - sol["apparent_elevation"]
+
+        #     fig = plt.figure(figsize=(9, 7.5), dpi=130, facecolor='white')
+        #     ax = fig.add_subplot(111, projection='polar')
+        #     ax.set_theta_zero_location('N')
+        #     ax.set_theta_direction(-1)
+        #     ax.set_aspect('equal', adjustable='box')
+        #     ax.set_ylim(0, 90)
+        #     ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
+        #     ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
+        #                        fontsize=7, color='#555')
+        #     ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
+        #     ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=10, fontweight='bold')
+        #     ax.set_facecolor('#F0F4F8')
+        #     ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
+
+        #     sc = ax.scatter(
+        #         np.radians(sol["azimuth"].values),
+        #         sol["r"].values,
+        #         c=sol.index.dayofyear,
+        #         cmap='YlOrRd',
+        #         s=1.0, alpha=0.55,
+        #         vmin=1, vmax=365,
+        #         linewidths=0, zorder=2,
+        #     )
+        #     cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.75)
+        #     cbar.set_label('Day of Year', fontsize=9)
+        #     cbar.set_ticks([1, 91, 182, 273, 365])
+        #     cbar.set_ticklabels(['1\n(Jan)', '91\n(Apr)', '182\n(Jul)', '273\n(Oct)', '365\n(Dec)'])
+
+        #     key_dates = [
+        #         ("Mar 21 (Spring Equinox)", "2020-03-21", "#FF9500", 1.6),
+        #         ("Jun 21 (Summer Solstice)", "2020-06-21", "#CC0000", 2.0),
+        #         ("Dec 21 (Winter Solstice)", "2020-12-21", "#0066CC", 2.0),
+        #     ]
+        #     for lbl, dstr, col, lw in key_dates:
+        #         dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
+        #         ks = _solpos_lib.get_solarposition(dt, lat, lon)
+        #         ks = ks[ks["apparent_elevation"] > 0]
+        #         if not ks.empty:
+        #             ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
+        #                     color=col, linewidth=lw, label=lbl, zorder=4)
+
+        #     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.06), ncol=3,
+        #               frameon=True, fontsize=8, borderaxespad=0)
+        #     ax.set_title(f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
+        #                  fontsize=11, fontweight='bold', color='#333', pad=14)
+
+        #     plt.tight_layout()
+        #     tmp = _save_mpl_figure(fig)
+        #     plt.close(fig)
+
+        #     # Use square dimensions to maintain circular aspect ratio
+        #     # img_size = min(SW * 0.55, SH * 0.75)
+        #     # img_l = (SW - img_size) / 2
+        #     img_size = min(SW*0.85 , SH*.75 )
+        #     img_l = (SW - img_size) / 2
+        #     img_t = 0.72
+        #     slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_size), height=Inches(img_size))
+        #     os.unlink(tmp)
+
+        # except Exception as e:
+        #     _err_box(slide, e)
+
+        # _add_logo(slide)
     def _make_sun_path_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _add_slide_title(slide, "Sun Path Diagram")
@@ -584,67 +677,117 @@ def generate_combined_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            fig = plt.figure(figsize=(8.5, 7.2), dpi=130, facecolor='white')
+            # ---------- FIGURE ----------
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
+
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
+
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
-            ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
-                               fontsize=7, color='#555')
+            ax.set_yticklabels(
+                ['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
+                fontsize=7, color='#555'
+            )
+
             ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
-            ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=10, fontweight='bold')
+            ax.set_xticklabels(
+                ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
+                fontsize=10, fontweight='bold'
+            )
+
             ax.set_facecolor('#F0F4F8')
             ax.grid(True, alpha=0.35, linestyle='--', linewidth=0.6)
 
+            # ---------- SCATTER ----------
             sc = ax.scatter(
                 np.radians(sol["azimuth"].values),
                 sol["r"].values,
                 c=sol.index.dayofyear,
                 cmap='YlOrRd',
-                s=1.0, alpha=0.55,
-                vmin=1, vmax=365,
-                linewidths=0, zorder=2,
+                s=1.0,
+                alpha=0.55,
+                vmin=1,
+                vmax=365,
+                linewidths=0,
+                zorder=2,
             )
-            cbar = fig.colorbar(sc, ax=ax, pad=0.10, fraction=0.035, shrink=0.75)
+
+            # ---------- COLORBAR ----------
+            cbar = fig.colorbar(sc, ax=ax, pad=0.08, fraction=0.035, shrink=0.8)
             cbar.set_label('Day of Year', fontsize=9)
             cbar.set_ticks([1, 91, 182, 273, 365])
             cbar.set_ticklabels(['1\n(Jan)', '91\n(Apr)', '182\n(Jul)', '273\n(Oct)', '365\n(Dec)'])
 
+            # ---------- KEY DATES ----------
             key_dates = [
                 ("Mar 21 (Spring Equinox)", "2020-03-21", "#FF9500", 1.6),
                 ("Jun 21 (Summer Solstice)", "2020-06-21", "#CC0000", 2.0),
                 ("Dec 21 (Winter Solstice)", "2020-12-21", "#0066CC", 2.0),
             ]
+
             for lbl, dstr, col, lw in key_dates:
                 dt = pd.date_range(dstr, periods=288, freq='5min', tz=_tz)
                 ks = _solpos_lib.get_solarposition(dt, lat, lon)
                 ks = ks[ks["apparent_elevation"] > 0]
+
                 if not ks.empty:
-                    ax.plot(np.radians(ks["azimuth"]), 90 - ks["apparent_elevation"],
-                            color=col, linewidth=lw, label=lbl, zorder=4)
+                    ax.plot(
+                        np.radians(ks["azimuth"]),
+                        90 - ks["apparent_elevation"],
+                        color=col,
+                        linewidth=lw,
+                        label=lbl,
+                        zorder=4
+                    )
 
-            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.06), ncol=3,
-                      frameon=True, fontsize=8, borderaxespad=0)
-            ax.set_title(f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
-                         fontsize=11, fontweight='bold', color='#333', pad=14)
+            # ---------- LEGEND ----------
+            ax.legend(
+                loc='upper center',
+                bbox_to_anchor=(0.5, -0.08),
+                ncol=3,
+                frameon=True,
+                fontsize=8
+            )
 
-            plt.tight_layout()
+            # ---------- TITLE ----------
+            ax.set_title(
+                f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
+                fontsize=11,
+                fontweight='bold',
+                color='#333',
+                pad=14
+            )
+
+            # ---------- LAYOUT FIX (CRITICAL) ----------
+            plt.tight_layout(pad=2.5)
+            fig.subplots_adjust(left=0.08, right=0.88, top=0.92, bottom=0.12)
+
+            # ---------- SAVE ----------
             tmp = _save_mpl_figure(fig)
             plt.close(fig)
 
-            img_w = SW * 0.62
-            img_h = SH * 0.83
-            img_l = (SW - img_w) / 2
+            # ---------- PPT IMAGE PLACEMENT ----------
+            img_size = min(SW * 0.75, SH * 0.75)   # square, no distortion
+            img_l = (SW - img_size) / 2
             img_t = 0.72
-            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_w), height=Inches(img_h))
+
+            slide.shapes.add_picture(
+                tmp,
+                Inches(img_l),
+                Inches(img_t),
+                width=Inches(img_size),
+                height=Inches(img_size)
+            )
+
             os.unlink(tmp)
 
         except Exception as e:
             _err_box(slide, e)
 
         _add_logo(slide)
-
     _make_sun_path_slide()
 
     # ── SECTION 4 – THERMAL & RADIATION MATRIX (Shading) ────────────────────
@@ -793,10 +936,11 @@ def generate_combined_pptx_report(
                 (sol["global_horizontal_irradiance"] > rad_threshold)
             )
 
-            fig = plt.figure(figsize=(9, 7.2), dpi=130, facecolor="white")
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor="white")
             ax = fig.add_subplot(111, projection="polar")
             ax.set_theta_zero_location("N")
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(["90°","75°","60°","45°","30°","15°","0°"],
@@ -841,11 +985,11 @@ def generate_combined_pptx_report(
             tmp = _save_mpl_figure(fig)
             plt.close(fig)
 
-            iw = SW * 0.58
-            ih = SH * 0.84
-            il = (SW - iw) / 2
-            slide.shapes.add_picture(tmp, Inches(il), Inches(0.72),
-                                     width=Inches(iw), height=Inches(ih))
+            # Use square dimensions to maintain circular aspect ratio
+            img_size = min(SW * 0.75, SH * 0.75)
+            img_l = (SW - img_size) / 2
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(0.72),
+                                     width=Inches(img_size), height=Inches(img_size))
             os.unlink(tmp)
 
         except Exception as e:
@@ -1050,6 +1194,280 @@ def generate_combined_pptx_report(
         _add_logo(slide)
 
     _make_shading_masks_slide()
+
+    # ── SECTION 8 – WIND ANALYSIS SLIDES ──────────────────────────────────────
+    def _prepare_wind_slides():
+        """Prepare and add wind analysis slides."""
+        try:
+            from modules.wind_module import (
+                prepare_wind_data, compute_wind_rose, compute_wind_statistics,
+                plot_wind_rose, plot_speed_heatmap, plot_direction_heatmap,
+                plot_speed_histogram, plot_climate_bubble
+            )
+        except ImportError:
+            return  # Skip if wind module not available
+
+        # Prepare wind data
+        months = list(range(1, 13))  # All months
+        wdf = prepare_wind_data(df, months=months, n_sectors=n_sectors)
+
+        if wdf.empty:
+            return  # No wind data available
+
+        rose_df, calm_pct = compute_wind_rose(wdf, n_sectors, exclude_calm=False)
+        stats = compute_wind_statistics(wdf)
+
+        # ── Wind Rose Slide ─────────────────────────────────────────────────
+        def _wind_rose_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Rose Analysis")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_wind_rose(rose_df, calm_pct, n_sectors)
+                
+                # Convert Plotly to static image
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=600)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _wind_rose_slide()
+
+        # ── Wind Speed Heatmap Slide ────────────────────────────────────────
+        def _speed_heatmap_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Speed Heatmap (Day × Hour)")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_speed_heatmap(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=600)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _speed_heatmap_slide()
+
+        # ── Wind Direction Heatmap Slide ────────────────────────────────────
+        def _direction_heatmap_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Direction Heatmap (Day × Hour)")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_direction_heatmap(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=600)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _direction_heatmap_slide()
+
+        # ── Wind Speed Distribution Slide ───────────────────────────────────
+        def _speed_histogram_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Speed Distribution")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_speed_histogram(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=500)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _speed_histogram_slide()
+
+        # ── Climate Bubble Chart Slide ──────────────────────────────────────
+        def _climate_bubble_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Temperature – Humidity – Wind Speed")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_climate_bubble(wdf)
+                
+                try:
+                    import plotly.io as pio
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    pio.write_image(fig, tmp.name, width=1200, height=650)
+                    
+                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                             width=Inches(SW - 0.54), height=Inches(5.9))
+                    os.unlink(tmp.name)
+                except Exception as pe:
+                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _climate_bubble_slide()
+
+        # ── Wind Statistics Summary Slide ───────────────────────────────────
+        def _wind_statistics_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Wind Statistics Summary")
+            _add_divider(slide, 0.62)
+
+            try:
+                # Prepare statistics data with colors and icons
+                stats_data = [
+                    {
+                        "label": "Prevailing Direction",
+                        "value": stats.get("prevailing_direction", "N/A"),
+                        "color": RGBColor(0x3B, 0x82, 0xF6),  # Blue
+                        "bg_color": RGBColor(0xEF, 0xF6, 0xFF),  # Light blue
+                    },
+                    {
+                        "label": "Mean Wind Speed",
+                        "value": f"{stats.get('mean_speed', 0):.2f} m/s",
+                        "color": RGBColor(0x8B, 0x5C, 0xF6),  # Purple
+                        "bg_color": RGBColor(0xF5, 0xF3, 0xFF),  # Light purple
+                    },
+                    {
+                        "label": "Maximum Wind Speed",
+                        "value": f"{stats.get('max_speed', 0):.2f} m/s",
+                        "color": RGBColor(0xEF, 0x44, 0x44),  # Red
+                        "bg_color": RGBColor(0xFF, 0xF1, 0xF1),  # Light red
+                    },
+                    {
+                        "label": "Calm Hours",
+                        "value": f"{stats.get('calm_percent', 0):.1f}%",
+                        "color": RGBColor(0xF5, 0x9E, 0x0B),  # Amber
+                        "bg_color": RGBColor(0xFF, 0xF8, 0xE7),  # Light amber
+                    },
+                    {
+                        "label": "Strongest Direction",
+                        "value": stats.get("strongest_direction", "N/A"),
+                        "color": RGBColor(0x06, 0xB6, 0xD4),  # Cyan
+                        "bg_color": RGBColor(0xEC, 0xF8, 0xFE),  # Light cyan
+                    },
+                    {
+                        "label": "Total Data Points",
+                        "value": f"{len(wdf)} hours",
+                        "color": RGBColor(0x10, 0xB9, 0x81),  # Green
+                        "bg_color": RGBColor(0xF0, 0xFF, 0xF4),  # Light green
+                    },
+                ]
+
+                # Create 3x2 grid of cards
+                card_width = (SW - 0.8) / 3
+                card_height = 1.8
+                start_top = 0.75
+                start_left = 0.27
+
+                for idx, stat in enumerate(stats_data):
+                    col = idx % 3
+                    row = idx // 3
+                    
+                    left = start_left + col * (card_width + 0.05)
+                    top = start_top + row * (card_height + 0.15)
+
+                    # Add card background shape with border
+                    card = slide.shapes.add_shape(
+                        1,  # Rectangle
+                        Inches(left),
+                        Inches(top),
+                        Inches(card_width),
+                        Inches(card_height),
+                    )
+                    card.fill.solid()
+                    card.fill.fore_color.rgb = stat["bg_color"]
+                    card.line.color.rgb = stat["color"]
+                    card.line.width = Pt(2)
+
+                    # Add label
+                    label_tb = slide.shapes.add_textbox(
+                        Inches(left + 0.1),
+                        Inches(top + 0.1),
+                        Inches(card_width - 0.2),
+                        Inches(0.5),
+                    )
+                    label_tf = label_tb.text_frame
+                    label_tf.word_wrap = True
+                    p = label_tf.paragraphs[0]
+                    run = p.add_run()
+                    run.text = stat["label"]
+                    run.font.size = Pt(10)
+                    run.font.bold = True
+                    run.font.color.rgb = stat["color"]
+
+                    # Add value
+                    value_tb = slide.shapes.add_textbox(
+                        Inches(left + 0.1),
+                        Inches(top + 0.65),
+                        Inches(card_width - 0.2),
+                        Inches(0.9),
+                    )
+                    value_tf = value_tb.text_frame
+                    value_tf.word_wrap = True
+                    value_tf.vertical_anchor = 1  # Middle alignment
+                    p = value_tf.paragraphs[0]
+                    p.alignment = PP_ALIGN.CENTER
+                    run = p.add_run()
+                    run.text = stat["value"]
+                    run.font.size = Pt(16)
+                    run.font.bold = True
+                    run.font.color.rgb = DARK_GREY
+
+            except Exception as e:
+                _err_box(slide, e)
+
+            _add_logo(slide)
+
+        _wind_statistics_slide()
+
+    _prepare_wind_slides()
 
     # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
     def _make_annexure_slide():

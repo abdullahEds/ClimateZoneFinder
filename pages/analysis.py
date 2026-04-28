@@ -515,6 +515,7 @@ with col_left:
             temp_threshold=float(st.session_state.get("temp_threshold", 28.0)),
             rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
             design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
+            n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
         )
         st.download_button(
             label="⬇️ Download Combined Climate & Shading Report",

@@ -20,7 +20,7 @@ modules_dir = os.path.join(pages_dir, 'modules')
 sys.path.insert(0, pages_dir)
 sys.path.insert(0, modules_dir)
 
-from pages.modules.ppt_report import generate_pptx_report, generate_shading_pptx_report
+from pages.modules.ppt_report import generate_pptx_report, generate_shading_pptx_report, generate_wind_pptx_report
 from pages.modules.combined_report import generate_combined_pptx_report
 
 app = FastAPI(
@@ -261,6 +261,56 @@ async def generate_shading_report(
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
 
+@app.post("/api/reports/wind-analysis")
+async def generate_wind_report(
+    file: UploadFile = File(...),
+    n_sectors: int = Form(16, description="Number of wind direction sectors (default: 16)"),
+):
+    """
+    Generate a wind analysis PowerPoint report from an EPW file.
+    
+    Parameters:
+    - file: EPW weather file (required)
+    - n_sectors: Number of compass sectors for wind rose (default: 16, options: 4, 8, 16)
+    
+    Returns: PowerPoint report file
+    """
+    try:
+        # Read uploaded file
+        content = await file.read()
+        
+        # Parse EPW
+        df, metadata = parse_epw_file(content)
+        
+        if df.empty:
+            raise ValueError("EPW file is empty or could not be parsed")
+        
+        # Validate n_sectors
+        if n_sectors not in [4, 8, 16]:
+            n_sectors = 16
+        
+        # Generate report
+        pptx_buffer = generate_wind_pptx_report(
+            df=df,
+            metadata=metadata,
+            n_sectors=n_sectors
+        )
+        
+        city = metadata.get('city', 'Wind_Report')
+        filename = f"Wind_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+        
+        return StreamingResponse(
+            iter([pptx_buffer.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+
 @app.post("/api/reports/combined-analysis")
 async def generate_combined_report(
     file: UploadFile = File(...),
@@ -271,15 +321,17 @@ async def generate_combined_report(
     temp_threshold: float = Form(28.0, description="Temperature threshold (°C), default: 28.0"),
     rad_threshold: float = Form(315.0, description="Radiation threshold (W/m²), default: 315.0"),
     design_cutoff_angle: float = Form(45.0, description="Design cutoff angle (°), default: 45.0"),
+    n_sectors: int = Form(16, description="Number of wind direction sectors (default: 16, options: 4, 8, 16)"),
 ):
     """
-    Generate a combined Climate & Shading Analysis PowerPoint report from an EPW file.
+    Generate a combined Climate & Shading & Wind Analysis PowerPoint report from an EPW file.
     
     This endpoint generates a comprehensive report with:
     - Cover slide with location info
     - Assumptions & Analysis Parameters slide (customizable thresholds)
     - Climate Analysis: Dry Bulb Temperature, Relative Humidity, Sun Path
     - Shading Analysis: Thermal/Radiation Matrix, Sun Path Shading, Orientation Analysis, Shading Masks
+    - Wind Analysis: Wind Rose, Speed & Direction Heatmaps, Wind Speed Distribution, Climate Bubble Chart, Wind Statistics
     - Annexure with disclaimer and acknowledgements
     
     Parameters:
@@ -291,6 +343,7 @@ async def generate_combined_report(
     - temp_threshold: Temperature threshold for overheating detection (°C, default: 28.0)
     - rad_threshold: Solar radiation threshold for shading analysis (W/m², default: 315.0)
     - design_cutoff_angle: Vertical design angle for shading calculations (°, default: 45.0)
+    - n_sectors: Number of compass sectors for wind rose (default: 16, options: 4, 8, 16)
     
     Returns: PowerPoint report file with combined climate and shading analysis
     """
@@ -316,6 +369,10 @@ async def generate_combined_report(
             end_dt = pd.to_datetime(f"{_year}-12-31").date()
         else:
             end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+        # Validate n_sectors
+        if n_sectors not in [4, 8, 16]:
+            n_sectors = 16
         
         # Generate combined report
         pptx_buffer = generate_combined_pptx_report(
@@ -328,6 +385,7 @@ async def generate_combined_report(
             metadata=metadata,
             temp_threshold=temp_threshold,
             rad_threshold=rad_threshold,
+            n_sectors=n_sectors,
             design_cutoff_angle=design_cutoff_angle,
         )
         
@@ -381,10 +439,19 @@ def api_documentation():
                     "design_cutoff_angle": "Design cutoff angle in degrees (default: 45.0)"
                 }
             },
+            "wind_analysis_report": {
+                "method": "POST",
+                "path": "/api/reports/wind-analysis",
+                "description": "Generate wind analysis PowerPoint report from EPW file",
+                "parameters": {
+                    "file": "EPW weather file (required)",
+                    "n_sectors": "Number of wind direction sectors (default: 16, options: 4, 8, 16)"
+                }
+            },
             "combined_analysis_report": {
                 "method": "POST",
                 "path": "/api/reports/combined-analysis",
-                "description": "Generate combined Climate & Shading Analysis PowerPoint report from EPW file (Comprehensive Report)",
+                "description": "Generate combined Climate & Shading & Wind Analysis PowerPoint report from EPW file (Comprehensive Report)",
                 "parameters": {
                     "file": "EPW weather file (required)",
                     "start_date": "Start date in YYYY-MM-DD format (optional, default: first day in file)",
