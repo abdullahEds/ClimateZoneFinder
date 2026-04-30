@@ -29,6 +29,7 @@ import urllib.request
 
 from modules.epw_parser import parse_epw
 from modules.ppt_report import generate_pptx_report, generate_shading_pptx_report
+from modules.combined_report import generate_combined_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
 from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module
@@ -446,7 +447,7 @@ with col_left:
         st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
         hour_range = st.slider(
             "Select hours (start - end)", min_value=0, max_value=23,
-            value=(8, 18), step=1, key="hour_range",
+            value=(0, 23), step=1, key="hour_range",
             label_visibility="collapsed", width=300,
         )
 
@@ -488,19 +489,6 @@ with col_left:
     # ── PowerPoint report download ─────────────────────────────────────────────
     st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
 
-    # Let user explicitly choose report type when Sun Path is selected
-    if selected_parameter == "Sun Path":
-        report_type = st.radio(
-            "Report Type:",
-            options=["Climate Report", "Shading Report"],
-            horizontal=True,
-            key="report_type_selector",
-            label_visibility="collapsed",
-        )
-        _is_shading = report_type == "Shading Report"
-    else:
-        _is_shading = False
-
     try:
         _year   = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
         _s_num  = st.session_state.start_month_idx + 1
@@ -512,42 +500,34 @@ with col_left:
             else (pd.to_datetime(f"{_year}-{_e_num+1}-01") - pd.Timedelta(days=1)).date()
         )
         _sh, _eh = st.session_state.get("hour_range", (8, 18))
+        
+        # For combined report: use full year and full day by default
+        _full_year_start = pd.to_datetime(f"{_year}-01-01").date()
+        _full_year_end = pd.to_datetime(f"{_year}-12-31").date()
+        _full_day_start_hour = 0
+        _full_day_end_hour = 23
 
-        if _is_shading:
-            _tz_str = metadata.get("timezone", "UTC")
-            shading_bytes = generate_shading_pptx_report(
-                df, metadata,
-                temp_threshold=float(st.session_state.get("temp_threshold", 28.0)),
-                rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
-                lat=float(st.session_state.get("shading_lat",  metadata.get("latitude")  or 0.0)),
-                lon=float(st.session_state.get("shading_lon",  metadata.get("longitude") or 0.0)),
-                tz_str=_tz_str,
-                design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
-            )
-            st.download_button(
-                label="⬇️ Download Shading Report",
-                data=shading_bytes,
-                file_name="Shading_Analysis_Report.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                key="download_shading_report",
-                width=300,
-            )
-        else:
-            report_bytes = generate_pptx_report(
-                df, _start_date, _end_date, _sh, _eh,
-                selected_parameter, metadata=metadata,
-            )
-            st.download_button(
-                label="⬇ Download Climate Report",
-                data=report_bytes,
-                file_name=(
-                    f"Climate_Analysis_Report_"
-                    f"{_start_date.strftime('%Y%m%d')}_to_{_end_date.strftime('%Y%m%d')}.pptx"
-                ),
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                key="download_report",
-                width=300,
-            )
+        # Generate combined report with Climate + Shading + Assumptions
+        # Use full year (Jan 1 - Dec 31) and full day (0-23 hours) by default
+        report_bytes = generate_combined_pptx_report(
+            df, _full_year_start, _full_year_end, _full_day_start_hour, _full_day_end_hour,
+            selected_parameter, metadata=metadata,
+            temp_threshold=float(st.session_state.get("temp_threshold", 28.0)),
+            rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
+            design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
+            n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
+        )
+        st.download_button(
+            label="⬇️ Download Combined Climate & Shading Report",
+            data=report_bytes,
+            file_name=(
+                f"Climate_Shading_Analysis_Report_"
+                f"{_full_year_start.strftime('%Y%m%d')}_to_{_full_year_end.strftime('%Y%m%d')}.pptx"
+            ),
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            key="download_combined_report",
+            width=300,
+        )
     except Exception as _e:
         st.error(f"❌ Failed to generate report: {_e}")
 

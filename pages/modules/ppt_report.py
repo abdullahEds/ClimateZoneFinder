@@ -440,10 +440,11 @@ def generate_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            fig = plt.figure(figsize=(8.5, 7.2), dpi=130, facecolor='white')
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
@@ -489,11 +490,11 @@ def generate_pptx_report(
             tmp = _save_mpl_figure(fig)
             plt.close(fig)
 
-            img_w = SW * 0.62
-            img_h = SH * 0.83
-            img_l = (SW - img_w) / 2
+            # Use square dimensions to maintain circular aspect ratio
+            img_size = min(SW * 0.55, SH * 0.75)
+            img_l = (SW - img_size) / 2
             img_t = 0.72
-            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_w), height=Inches(img_h))
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(img_t), width=Inches(img_size), height=Inches(img_size))
             os.unlink(tmp)
 
         except Exception as e:
@@ -519,10 +520,12 @@ def generate_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            fig = plt.figure(figsize=(8.0, 7.0), dpi=130, facecolor='white')
+            # fig = plt.figure(figsize=(8.0, 7.0), dpi=130, facecolor='white')
+            fig = plt.figure(figsize=(7.0, 7.0), dpi=130, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(['90°', '75°', '60°', '45°', '30°', '15°', '0°'], fontsize=7, color='#555')
@@ -572,7 +575,8 @@ def generate_pptx_report(
             ax.set_title(f'Sun Path with Shading Profile\nLat: {lat:.2f}°  Lon: {lon:.2f}°',
                         fontsize=10, fontweight='bold', color='#333', pad=12)
 
-            plt.tight_layout()
+            # plt.tight_layout()
+            plt.subplots_adjust(top=0.88, bottom=0.12)
             return fig
         except Exception as e:
             print(f"Shading diagram error: {e}")
@@ -1093,10 +1097,11 @@ def generate_shading_pptx_report(
                 (sol["global_horizontal_irradiance"] > rad_threshold)
             )
 
-            fig = plt.figure(figsize=(9, 7.2), dpi=130, facecolor="white")
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor="white")
             ax = fig.add_subplot(111, projection="polar")
             ax.set_theta_zero_location("N")
             ax.set_theta_direction(-1)
+            ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
             ax.set_yticklabels(["90\u00b0","75\u00b0","60\u00b0","45\u00b0","30\u00b0","15\u00b0","0\u00b0"],
@@ -1141,11 +1146,11 @@ def generate_shading_pptx_report(
             tmp = _save_fig(fig)
             plt.close(fig)
 
-            iw = SW * 0.58
-            ih = SH * 0.84
-            il = (SW - iw) / 2
-            slide.shapes.add_picture(tmp, Inches(il), Inches(0.72),
-                                     width=Inches(iw), height=Inches(ih))
+            # Use square dimensions to maintain circular aspect ratio
+            img_size = min(SW * 0.50, SH * 0.75)
+            img_l = (SW - img_size) / 2
+            slide.shapes.add_picture(tmp, Inches(img_l), Inches(0.72),
+                                     width=Inches(img_size), height=Inches(img_size))
             os.unlink(tmp)
 
         except Exception as e:
@@ -1340,6 +1345,461 @@ def generate_shading_pptx_report(
         _add_logo(slide)
 
     _shading_masks_slide()
+
+    # ── ANNEXURE ──────────────────────────────────────────────────────────────
+    def _make_annexure_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Annexure")
+        _divider(slide, 0.62)
+
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.80), Inches(SW - 0.54), Inches(6.0))
+        tf = tb.text_frame
+        tf.word_wrap = True
+
+        p = tf.paragraphs[0]
+        p.text = "About EDS"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_after = Pt(6)
+
+        p = tf.add_paragraph()
+        p.text = (
+            "Environmental Design Solutions [EDS] is a sustainability advisory firm. "
+            "Since 2002, EDS has worked on over 500 green building and energy efficiency "
+            "projects worldwide. The team focuses on climate change mitigation, low-carbon "
+            "design, building simulation, performance audits, and capacity building. EDS "
+            "continues to contribute to the buildings community with useful tools through "
+            "its IT services."
+        )
+        p.font.size = Pt(14)
+        p.font.color.rgb = DARK_GREY
+        p.line_spacing = 1.2
+        p.space_after = Pt(8)
+
+        p = tf.add_paragraph()
+        p.text = "Disclaimer"
+        p.font.size = Pt(12)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(4)
+        p.space_after = Pt(4)
+
+        for item in [
+            "Climate Zone Analyser is an outcome of the best efforts of building simulation experts at EDS.",
+            "\u2022  EDS does not assume responsibility for outcomes from its use. By using this Application, the User indemnifies EDS against any damages.",
+            "\u2022  EDS does not guarantee uninterrupted availability. By using this Application, the User agrees to share uploaded information with EDS for analysis and research purposes.",
+            "\u2022  Open-source resources used: Clima - Berkley, Streamlit, Python",
+            "\u2022  EDS is not liable to inform Users about updates to the Application or underlying resources",
+        ]:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(14)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+
+        p = tf.add_paragraph()
+        p.text = "Acknowledgement"
+        p.font.size = Pt(14)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(6)
+        p.space_after = Pt(4)
+
+        for item in [
+            "\u2022  Betti, G., et al. CBE Clima Tool Build. Simul. (2023). https://doi.org/10.1007/s12273-023-1090-5",
+            "\u2022  Streamlit, \u00a9 Streamlit Inc., licensed under Apache 2.0",
+            "\u2022  Python \u00a9 Python Software Foundation, licensed under PSF License Version 2",
+        ]:
+            p = tf.add_paragraph()
+            p.text = item
+            p.font.size = Pt(14)
+            p.font.color.rgb = DARK_GREY
+            p.line_spacing = 1.1
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
+
+        _add_logo(slide)
+
+    _make_annexure_slide()
+
+    report_bytes = io.BytesIO()
+    prs.save(report_bytes)
+    report_bytes.seek(0)
+    return report_bytes
+
+
+def generate_wind_pptx_report(
+    df: pd.DataFrame,
+    metadata: dict,
+    n_sectors: int = 16,
+):
+    """Generate a Wind Analysis PowerPoint report using the Voha template."""
+
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    except NameError:
+        base_dir = os.getcwd()
+    template_path = os.path.join(base_dir, "Voha Hospitality Climate analysis_v4 (2).pptx")
+    logo_path = os.path.join(base_dir, "EDSlogo.png")
+
+    if os.path.exists(template_path):
+        prs = Presentation(template_path)
+        _ppt_remove_all_slides(prs)
+    else:
+        prs = Presentation()
+        prs.slide_width = Inches(13.33)
+        prs.slide_height = Inches(7.5)
+
+    BLANK_LAYOUT = prs.slide_layouts[6]
+    TITLE_RED = RGBColor(0xC0, 0x00, 0x00)
+    DARK_GREY  = RGBColor(0x40, 0x40, 0x40)
+    WHITE      = RGBColor(0xFF, 0xFF, 0xFF)
+
+    SW = prs.slide_width.inches
+    SH = prs.slide_height.inches
+    LOGO_H = 0.40
+    LOGO_W = LOGO_H * (550 / 308)
+    LOGO_L = 0.18
+    LOGO_T = SH - LOGO_H - 0.12
+
+    def _add_logo(slide):
+        if os.path.exists(logo_path):
+            slide.shapes.add_picture(logo_path, Inches(LOGO_L), Inches(LOGO_T),
+                                     width=Inches(LOGO_W), height=Inches(LOGO_H))
+
+    def _slide_title(slide, text, top=0.13):
+        tb = slide.shapes.add_textbox(Inches(0.27), Inches(top), Inches(SW - 0.54), Inches(0.45))
+        tf = tb.text_frame
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = text
+        run.font.size = Pt(20)
+        run.font.bold = True
+        run.font.color.rgb = TITLE_RED
+
+    def _divider(slide, top_inches):
+        bar = slide.shapes.add_shape(1, Inches(0.27), Inches(top_inches),
+                                     Inches(SW - 0.54), Inches(0.03))
+        bar.fill.solid()
+        bar.fill.fore_color.rgb = TITLE_RED
+        bar.line.fill.background()
+
+    def _err(slide, err):
+        tb = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(SW - 1), Inches(2))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        run = p.add_run()
+        run.text = f"Error: {err}"
+        run.font.size = Pt(10)
+        run.font.color.rgb = TITLE_RED
+
+    def _save_fig(fig) -> str:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            fig.savefig(tmp.name, dpi=130, bbox_inches="tight", facecolor="white")
+            return tmp.name
+
+    # ── COVER ─────────────────────────────────────────────────────────────────
+    def _cover():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        bg = slide.shapes.add_shape(1, Inches(0), Inches(2.4), Inches(SW), Inches(2.6))
+        bg.fill.solid()
+        bg.fill.fore_color.rgb = TITLE_RED
+        bg.line.fill.background()
+
+        tb = slide.shapes.add_textbox(Inches(0.6), Inches(2.55), Inches(SW - 1.2), Inches(1.2))
+        p = tb.text_frame.paragraphs[0]
+        run = p.add_run()
+        run.text = "Wind Analysis Report"
+        run.font.size = Pt(40)
+        run.font.bold = True
+        run.font.color.rgb = WHITE
+
+        tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.75), Inches(SW - 1.2), Inches(0.65))
+        p2 = tb2.text_frame.paragraphs[0]
+        run2 = p2.add_run()
+        _city = metadata.get("city", "") if metadata else ""
+        run2.text = f"Location: {_city}"
+        run2.font.size = Pt(13)
+        run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
+
+        tb3 = slide.shapes.add_textbox(Inches(0.6), Inches(6.5), Inches(SW - 1.2), Inches(0.4))
+        p3 = tb3.text_frame.paragraphs[0]
+        run3 = p3.add_run()
+        run3.text = "Sections: Wind Rose | Speed & Direction Heatmaps | Statistics | Climate Integration"
+        run3.font.size = Pt(10)
+        run3.font.color.rgb = DARK_GREY
+
+        _add_logo(slide)
+
+    _cover()
+
+    # Import wind module utilities
+    try:
+        from modules.wind_module import (
+            prepare_wind_data, compute_wind_rose, compute_wind_statistics,
+            plot_wind_rose, plot_speed_heatmap, plot_direction_heatmap,
+            plot_speed_histogram, plot_climate_bubble
+        )
+    except ImportError as e:
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Wind Analysis")
+        _divider(slide, 0.62)
+        _err(slide, f"Could not import wind module: {str(e)[:50]}")
+        _add_logo(slide)
+        
+        report_bytes = io.BytesIO()
+        prs.save(report_bytes)
+        report_bytes.seek(0)
+        return report_bytes
+
+    # Prepare wind data
+    months = list(range(1, 13))  # All months
+    wdf = prepare_wind_data(df, months=months, n_sectors=n_sectors)
+
+    if wdf.empty:
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Wind Analysis")
+        _divider(slide, 0.62)
+        _err(slide, "No wind data available for the analysis period.")
+        _add_logo(slide)
+        
+        report_bytes = io.BytesIO()
+        prs.save(report_bytes)
+        report_bytes.seek(0)
+        return report_bytes
+
+    rose_df, calm_pct = compute_wind_rose(wdf, n_sectors=n_sectors, exclude_calm=False)
+    stats = compute_wind_statistics(wdf)
+
+    # ── WIND ROSE SLIDE ───────────────────────────────────────────────────────
+    def _wind_rose_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Wind Rose Analysis")
+        _divider(slide, 0.62)
+
+        try:
+            fig = plot_wind_rose(rose_df, calm_pct, n_sectors)
+            
+            # Convert Plotly to static image
+            try:
+                import plotly.io as pio
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmp.close()
+                pio.write_image(fig, tmp.name, width=1200, height=600)
+                
+                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp.name)
+            except Exception as pe:
+                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+        except Exception as e:
+            _err(slide, f"Wind rose: {str(e)[:50]}")
+
+        _add_logo(slide)
+
+    _wind_rose_slide()
+
+    # ── WIND SPEED HEATMAP SLIDE ──────────────────────────────────────────────
+    def _speed_heatmap_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Wind Speed Heatmap (Day × Hour)")
+        _divider(slide, 0.62)
+
+        try:
+            fig = plot_speed_heatmap(wdf)
+            
+            try:
+                import plotly.io as pio
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmp.close()
+                pio.write_image(fig, tmp.name, width=1200, height=600)
+                
+                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp.name)
+            except Exception as pe:
+                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+        except Exception as e:
+            _err(slide, f"Speed heatmap: {str(e)[:50]}")
+
+        _add_logo(slide)
+
+    _speed_heatmap_slide()
+
+    # ── WIND DIRECTION HEATMAP SLIDE ──────────────────────────────────────────
+    def _direction_heatmap_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Wind Direction Heatmap (Day × Hour)")
+        _divider(slide, 0.62)
+
+        try:
+            fig = plot_direction_heatmap(wdf)
+            
+            try:
+                import plotly.io as pio
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmp.close()
+                pio.write_image(fig, tmp.name, width=1200, height=600)
+                
+                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp.name)
+            except Exception as pe:
+                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+        except Exception as e:
+            _err(slide, f"Direction heatmap: {str(e)[:50]}")
+
+        _add_logo(slide)
+
+    _direction_heatmap_slide()
+
+    # ── WIND SPEED HISTOGRAM SLIDE ────────────────────────────────────────────
+    def _speed_histogram_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Wind Speed Distribution")
+        _divider(slide, 0.62)
+
+        try:
+            fig = plot_speed_histogram(wdf)
+            
+            try:
+                import plotly.io as pio
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmp.close()
+                pio.write_image(fig, tmp.name, width=1200, height=500)
+                
+                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp.name)
+            except Exception as pe:
+                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+        except Exception as e:
+            _err(slide, f"Speed histogram: {str(e)[:50]}")
+
+        _add_logo(slide)
+
+    _speed_histogram_slide()
+
+    # ── CLIMATE BUBBLE CHART SLIDE ────────────────────────────────────────────
+    def _climate_bubble_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Temperature – Humidity – Wind Speed")
+        _divider(slide, 0.62)
+
+        try:
+            fig = plot_climate_bubble(wdf)
+            
+            try:
+                import plotly.io as pio
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                tmp.close()
+                pio.write_image(fig, tmp.name, width=1200, height=650)
+                
+                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp.name)
+            except Exception as pe:
+                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+        except Exception as e:
+            _err(slide, f"Climate bubble: {str(e)[:50]}")
+
+        _add_logo(slide)
+
+    _climate_bubble_slide()
+
+    # ── WIND STATISTICS SUMMARY SLIDE ─────────────────────────────────────────
+    def _statistics_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Wind Statistics Summary")
+        _divider(slide, 0.62)
+
+        try:
+            # Prepare statistics data
+            stat_labels = [
+                "Prevailing Direction",
+                "Mean Wind Speed",
+                "Maximum Wind Speed",
+                "Calm Hours (%)",
+                "Strongest Wind Direction",
+                "Total Data Points",
+            ]
+
+            stat_values = [
+                stats.get("prevailing_direction", "N/A"),
+                f"{stats.get('mean_speed', 0):.2f} m/s",
+                f"{stats.get('max_speed', 0):.2f} m/s",
+                f"{stats.get('calm_percent', 0):.1f}%",
+                stats.get("strongest_direction", "N/A"),
+                f"{len(wdf)} hours",
+            ]
+
+            # Create a two-column layout
+            col_width = (SW - 1.0) / 2
+            left_x = 0.5
+            right_x = left_x + col_width + 0.2
+
+            # Left column
+            left_tb = slide.shapes.add_textbox(Inches(left_x), Inches(0.8), Inches(col_width), Inches(5.5))
+            left_tf = left_tb.text_frame
+            left_tf.word_wrap = True
+
+            for i in range(0, 3):
+                label = stat_labels[i]
+                value = stat_values[i]
+                
+                p = left_tf.add_paragraph() if i > 0 else left_tf.paragraphs[0]
+                p.text = ""
+                p.space_before = Pt(12)
+                p.space_after = Pt(2)
+
+                run = p.add_run()
+                run.text = label
+                run.font.size = Pt(12)
+                run.font.bold = True
+                run.font.color.rgb = TITLE_RED
+
+                p2 = left_tf.add_paragraph()
+                p2.text = value
+                p2.font.size = Pt(11)
+                p2.font.color.rgb = DARK_GREY
+                p2.space_after = Pt(0)
+
+            # Right column
+            right_tb = slide.shapes.add_textbox(Inches(right_x), Inches(0.8), Inches(col_width), Inches(5.5))
+            right_tf = right_tb.text_frame
+            right_tf.word_wrap = True
+
+            for i in range(3, 6):
+                label = stat_labels[i]
+                value = stat_values[i]
+                
+                p = right_tf.add_paragraph() if i == 3 else right_tf.add_paragraph()
+                p.text = ""
+                p.space_before = Pt(12)
+                p.space_after = Pt(2)
+
+                run = p.add_run()
+                run.text = label
+                run.font.size = Pt(12)
+                run.font.bold = True
+                run.font.color.rgb = TITLE_RED
+
+                p2 = right_tf.add_paragraph()
+                p2.text = value
+                p2.font.size = Pt(11)
+                p2.font.color.rgb = DARK_GREY
+                p2.space_after = Pt(0)
+
+        except Exception as e:
+            _err(slide, f"Statistics: {str(e)[:50]}")
+
+        _add_logo(slide)
+
+    _statistics_slide()
 
     # ── ANNEXURE ──────────────────────────────────────────────────────────────
     def _make_annexure_slide():
