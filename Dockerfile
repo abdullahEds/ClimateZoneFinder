@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Install system dependencies for Kaleido (Plotly static image export)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium-browser \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
