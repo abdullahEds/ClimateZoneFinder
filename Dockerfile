@@ -6,12 +6,16 @@ WORKDIR /app
 
 # Install system dependencies for Kaleido (Plotly static image export)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium-browser \
+    wget \
+    gnupg \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxrender1 \
     libxext6 \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install
