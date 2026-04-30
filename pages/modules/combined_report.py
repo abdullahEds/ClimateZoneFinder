@@ -4,7 +4,7 @@ import io
 import os
 import tempfile
 from datetime import datetime
-from tkinter import SW
+# from tkinter import SW
 
 import matplotlib.pyplot as plt
 import numpy as np
