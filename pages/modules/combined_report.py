@@ -51,6 +51,7 @@ def generate_combined_pptx_report(
     rad_threshold: float = 315.0,
     design_cutoff_angle: float = 45.0,
     n_sectors: int = 16,
+    include_thermal_comfort: bool = False,
 ):
     """Generate a combined PowerPoint report with Climate + Shading Analysis + Assumptions slide."""
 
@@ -1468,6 +1469,139 @@ def generate_combined_pptx_report(
         _wind_statistics_slide()
 
     _prepare_wind_slides()
+
+    # ── SECTION 9 – THERMAL COMFORT ANALYSIS SLIDES ──────────────────────────
+    def _prepare_thermal_comfort_slides():
+        """Prepare and add thermal comfort analysis slides."""
+        try:
+            from modules.thermal_comfort_ppt import (
+                compute_psychrometric_simple,
+                compute_adaptive_comfort_simple,
+                classify_comfort_simple,
+                plot_comfort_heatmap,
+                plot_strategy_distribution,
+                plot_degree_hours_monthly,
+                plot_adaptive_comfort_scatter,
+                plot_comfort_percentages
+            )
+        except ImportError:
+            return  # Skip if thermal comfort module not available
+
+        # Process thermal comfort data
+        try:
+            tdf = df.copy()
+            tdf = compute_psychrometric_simple(tdf)
+            tdf = compute_adaptive_comfort_simple(tdf)
+            tdf = classify_comfort_simple(tdf)
+        except Exception as e:
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Thermal Comfort Analysis")
+            _add_divider(slide, 0.62)
+            _err_box(slide, f"Thermal comfort data processing error: {str(e)[:50]}")
+            _add_logo(slide)
+            return
+
+        # ── Comfort Heatmap Slide ──────────────────────────────────────────
+        def _comfort_heatmap_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Comfort Heatmap – Hour × Month")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_comfort_heatmap(tdf)
+                tmp = _save_mpl_figure(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp)
+            except Exception as e:
+                _err_box(slide, f"Comfort heatmap: {str(e)[:40]}")
+
+            _add_logo(slide)
+
+        _comfort_heatmap_slide()
+
+        # ── Strategy Distribution Slide ────────────────────────────────────
+        def _strategy_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Design Strategy Opportunities")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_strategy_distribution(tdf)
+                tmp = _save_mpl_figure(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp)
+            except Exception as e:
+                _err_box(slide, f"Strategy chart: {str(e)[:40]}")
+
+            _add_logo(slide)
+
+        _strategy_slide()
+
+        # ── Degree Hours Slide ─────────────────────────────────────────────
+        def _degree_hours_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Monthly Degree Hours – Cooling & Heating Demand")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_degree_hours_monthly(tdf)
+                tmp = _save_mpl_figure(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp)
+            except Exception as e:
+                _err_box(slide, f"Degree hours: {str(e)[:40]}")
+
+            _add_logo(slide)
+
+        _degree_hours_slide()
+
+        # ── Adaptive Comfort Slide ─────────────────────────────────────────
+        def _adaptive_comfort_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Adaptive Comfort – ASHRAE 55 Analysis")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_adaptive_comfort_scatter(tdf)
+                tmp = _save_mpl_figure(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp)
+            except Exception as e:
+                _err_box(slide, f"Adaptive comfort: {str(e)[:40]}")
+
+            _add_logo(slide)
+
+        _adaptive_comfort_slide()
+
+        # ── Comfort Performance Summary Slide ───────────────────────────────
+        def _performance_summary_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Thermal Comfort Performance Summary")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_comfort_percentages(tdf)
+                tmp = _save_mpl_figure(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp)
+            except Exception as e:
+                _err_box(slide, f"Performance summary: {str(e)[:40]}")
+
+            _add_logo(slide)
+
+        _performance_summary_slide()
+
+    _prepare_thermal_comfort_slides()
 
     # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
     def _make_annexure_slide():
