@@ -1473,6 +1473,8 @@ def generate_combined_pptx_report(
     # ── SECTION 9 – THERMAL COMFORT ANALYSIS SLIDES ──────────────────────────
     def _prepare_thermal_comfort_slides():
         """Prepare and add thermal comfort analysis slides."""
+        if not include_thermal_comfort:
+            return  # Skip thermal comfort section if not requested
         try:
             from modules.thermal_comfort_ppt import (
                 compute_psychrometric_simple,
@@ -1482,6 +1484,7 @@ def generate_combined_pptx_report(
                 plot_strategy_distribution,
                 plot_degree_hours_monthly,
                 plot_adaptive_comfort_scatter,
+                plot_psychrometric_chart,
                 plot_comfort_percentages
             )
         except ImportError:
@@ -1520,6 +1523,26 @@ def generate_combined_pptx_report(
             _add_logo(slide)
 
         _comfort_heatmap_slide()
+
+        # ── Psychrometric Chart Slide ──────────────────────────────────────
+        def _psychrometric_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Psychrometric Chart – Climate Data")
+            _add_divider(slide, 0.62)
+
+            try:
+                fig = plot_psychrometric_chart(tdf)
+                tmp = _save_mpl_figure(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(tmp)
+            except Exception as e:
+                _err_box(slide, f"Psychrometric chart: {str(e)[:40]}")
+
+            _add_logo(slide)
+
+        _psychrometric_slide()
 
         # ── Strategy Distribution Slide ────────────────────────────────────
         def _strategy_slide():
