@@ -290,6 +290,90 @@ def plot_adaptive_comfort_scatter(df: pd.DataFrame) -> plt.Figure:
     return fig
 
 
+def plot_psychrometric_chart(df: pd.DataFrame) -> plt.Figure:
+    """Create psychrometric chart with comfort zones and hourly data points."""
+    P_ATM = 101_325.0
+    
+    # Compute humidity ratios if not already present
+    T = pd.to_numeric(df["dry_bulb_temperature"], errors="coerce")
+    RH = pd.to_numeric(df["relative_humidity"], errors="coerce").clip(0, 100)
+    
+    # Saturation vapor pressure and humidity ratio
+    e_s = 611.2 * np.exp(17.67 * T / (T + 243.5))
+    e = RH / 100.0 * e_s
+    hr = 0.62198 * e / (P_ATM - e)
+    hr_gkg = (hr * 1000).clip(lower=0.0)  # Convert to g/kg
+    
+    fig, ax = plt.subplots(figsize=(13, 5.5), dpi=120)
+    
+    # Plot helper function for RH lines
+    def hr_at_rh(T_arr, rh_pct):
+        e_s_arr = 611.2 * np.exp(17.67 * T_arr / (T_arr + 243.5))
+        e_arr = rh_pct / 100.0 * e_s_arr
+        return 1000.0 * 0.62198 * e_arr / (P_ATM - e_arr)
+    
+    # Plot constant RH curves (background)
+    T_cont = np.linspace(-5, 50, 200)
+    for rh in [10, 20, 30, 40, 50, 60, 70, 80, 90]:
+        hr_line = hr_at_rh(T_cont, rh)
+        mask = (hr_line >= 0) & (hr_line <= 30)
+        ax.plot(T_cont[mask], hr_line[mask], color='gray', alpha=0.2, linewidth=0.8, linestyle=':')
+        # Add RH label
+        if rh in [20, 40, 60, 80]:
+            label_T = 35
+            label_hr = float(hr_at_rh(np.array([label_T]), rh)[0])
+            if 0 < label_hr <= 28:
+                ax.text(label_T, label_hr, f'{rh}%', fontsize=7, color='gray', alpha=0.6)
+    
+    # ASHRAE 55 comfort zone (static)
+    comfort_T_poly = [20, 26, 26, 20, 20]
+    comfort_hr_poly = [
+        float(hr_at_rh(np.array([t]), rh)[0]) 
+        for t, rh in zip([20, 26, 26, 20, 20], [20, 20, 60, 80, 20])
+    ]
+    ax.fill(comfort_T_poly, comfort_hr_poly, color='#2ecc71', alpha=0.15, label='ASHRAE 55 Comfort Zone', edgecolor='#27ae60', linewidth=1.5)
+    
+    # Natural ventilation zone
+    nv_T = np.linspace(22, 32, 50)
+    nv_lo = hr_at_rh(nv_T, 20)
+    nv_hi = hr_at_rh(nv_T, 70)
+    ax.fill_between(nv_T, nv_lo, nv_hi, color='#27ae60', alpha=0.08, label='Natural Ventilation Zone')
+    
+    # Evaporative cooling zone
+    ev_T = np.linspace(25, 45, 50)
+    ev_lo = hr_at_rh(ev_T, 0)
+    ev_hi = hr_at_rh(ev_T, 35)
+    ax.fill_between(ev_T, np.minimum(ev_lo, 30), np.minimum(ev_hi, 30), 
+                     color='#1abc9c', alpha=0.10, label='Evaporative Cooling Zone')
+    
+    # Heating zone (cold side)
+    heat_T = [-5, 20, 20, -5, -5]
+    heat_hr = [0, 0, 30, 30, 0]
+    ax.fill(heat_T, heat_hr, color='#e67e22', alpha=0.06, label='Heating Zone', edgecolor='#d35400', linewidth=0.8)
+    
+    # Plot hourly data colored by dry bulb temperature
+    scatter = ax.scatter(T, hr_gkg, c=T, cmap='RdYlBu_r', s=8, alpha=0.5, edgecolors='none',
+                        vmin=T.min(), vmax=T.max())
+    
+    cbar = plt.colorbar(scatter, ax=ax, fraction=0.035, pad=0.03)
+    cbar.set_label('DBT (°C)', fontsize=10, fontweight='bold')
+    
+    ax.set_xlim(-5, 50)
+    ax.set_ylim(0, 28)
+    ax.set_xlabel("Dry Bulb Temperature (°C)", fontsize=11, fontweight='bold')
+    ax.set_ylabel("Humidity Ratio (g/kg dry air)", fontsize=11, fontweight='bold')
+    ax.set_title("Psychrometric Chart – Hourly Climate Data with Comfort & Strategy Zones", 
+                 fontsize=12, fontweight='bold', pad=10, color='#333')
+    ax.legend(loc='upper left', fontsize=9, frameon=True)
+    ax.grid(True, alpha=0.25, linestyle='--')
+    ax.set_facecolor('#fafafa')
+    
+    fig.patch.set_facecolor('white')
+    plt.tight_layout()
+    
+    return fig
+
+
 def plot_comfort_percentages(df: pd.DataFrame) -> plt.Figure:
     """Create summary chart of comfort statistics."""
     try:
@@ -469,7 +553,7 @@ def generate_thermal_comfort_pptx_report(
         tb3 = slide.shapes.add_textbox(Inches(0.6), Inches(6.5), Inches(SW - 1.2), Inches(0.4))
         p3 = tb3.text_frame.paragraphs[0]
         run3 = p3.add_run()
-        run3.text = "Sections: Comfort Heatmap | Design Strategies | Degree Hours | Adaptive Comfort | Performance Summary"
+        run3.text = "Sections: Comfort Heatmap | Psychrometric Chart | Design Strategies | Degree Hours | Adaptive Comfort | Performance Summary"
         run3.font.size = Pt(10)
         run3.font.color.rgb = DARK_GREY
         
@@ -496,6 +580,26 @@ def generate_thermal_comfort_pptx_report(
         _add_logo(slide)
     
     _comfort_heatmap_slide()
+    
+    # ── PSYCHROMETRIC CHART SLIDE ─────────────────────────────────────────────
+    def _psychrometric_slide():
+        slide = prs.slides.add_slide(BLANK_LAYOUT)
+        _slide_title(slide, "Psychrometric Chart – Climate Data")
+        _divider(slide, 0.62)
+        
+        try:
+            fig = plot_psychrometric_chart(df_thermal)
+            tmp = _save_fig(fig)
+            plt.close(fig)
+            slide.shapes.add_picture(tmp, Inches(0.27), Inches(0.72),
+                                     width=Inches(SW - 0.54), height=Inches(5.9))
+            os.unlink(tmp)
+        except Exception as e:
+            _err(slide, f"Psychrometric chart: {str(e)[:50]}")
+        
+        _add_logo(slide)
+    
+    _psychrometric_slide()
     
     # ── STRATEGY DISTRIBUTION SLIDE ───────────────────────────────────────────
     def _strategy_slide():
