@@ -21,6 +21,7 @@ sys.path.insert(0, pages_dir)
 sys.path.insert(0, modules_dir)
 
 from pages.modules.ppt_report import generate_pptx_report, generate_shading_pptx_report, generate_wind_pptx_report
+from pages.modules.thermal_comfort_ppt import generate_thermal_comfort_pptx_report
 from pages.modules.combined_report import generate_combined_pptx_report
 
 app = FastAPI(
@@ -322,9 +323,10 @@ async def generate_combined_report(
     rad_threshold: float = Form(315.0, description="Radiation threshold (W/m²), default: 315.0"),
     design_cutoff_angle: float = Form(45.0, description="Design cutoff angle (°), default: 45.0"),
     n_sectors: int = Form(16, description="Number of wind direction sectors (default: 16, options: 4, 8, 16)"),
+    include_thermal_comfort: bool = Form(False, description="Include thermal comfort analysis (default: False)"),
 ):
     """
-    Generate a combined Climate & Shading & Wind Analysis PowerPoint report from an EPW file.
+    Generate a combined Climate & Shading & Wind & Thermal Comfort Analysis PowerPoint report from an EPW file.
     
     This endpoint generates a comprehensive report with:
     - Cover slide with location info
@@ -332,6 +334,7 @@ async def generate_combined_report(
     - Climate Analysis: Dry Bulb Temperature, Relative Humidity, Sun Path
     - Shading Analysis: Thermal/Radiation Matrix, Sun Path Shading, Orientation Analysis, Shading Masks
     - Wind Analysis: Wind Rose, Speed & Direction Heatmaps, Wind Speed Distribution, Climate Bubble Chart, Wind Statistics
+    - Thermal Comfort Analysis (optional): Comfort Heatmap, Psychrometric Chart, Design Strategies, Degree Hours, Adaptive Comfort, Performance Summary
     - Annexure with disclaimer and acknowledgements
     
     Parameters:
@@ -344,8 +347,9 @@ async def generate_combined_report(
     - rad_threshold: Solar radiation threshold for shading analysis (W/m², default: 315.0)
     - design_cutoff_angle: Vertical design angle for shading calculations (°, default: 45.0)
     - n_sectors: Number of compass sectors for wind rose (default: 16, options: 4, 8, 16)
+    - include_thermal_comfort: Include thermal comfort analysis slides (default: False)
     
-    Returns: PowerPoint report file with combined climate and shading analysis
+    Returns: PowerPoint report file with combined climate, shading, wind, and optional thermal comfort analysis
     """
     try:
         # Read uploaded file
@@ -387,10 +391,62 @@ async def generate_combined_report(
             rad_threshold=rad_threshold,
             n_sectors=n_sectors,
             design_cutoff_angle=design_cutoff_angle,
+            include_thermal_comfort=include_thermal_comfort,
         )
         
         city = metadata.get('city', 'Combined_Report')
         filename = f"Climate_Shading_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+        
+        return StreamingResponse(
+            iter([pptx_buffer.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+
+@app.post("/api/reports/thermal-comfort")
+async def generate_thermal_comfort_report(
+    file: UploadFile = File(...),
+):
+    """
+    Generate a thermal comfort analysis PowerPoint report from an EPW file.
+    
+    Includes:
+    - Comfort heatmap (hour × month)
+    - Design strategy opportunities
+    - Monthly cooling and heating degree hours
+    - ASHRAE 55 adaptive comfort analysis
+    - Thermal comfort performance summary
+    - Design recommendations
+    
+    Parameters:
+    - file: EPW weather file (required)
+    
+    Returns: PowerPoint report file
+    """
+    try:
+        # Read uploaded file
+        content = await file.read()
+        
+        # Parse EPW
+        df, metadata = parse_epw_file(content)
+        
+        if df.empty:
+            raise ValueError("EPW file is empty or could not be parsed")
+        
+        # Generate thermal comfort report
+        pptx_buffer = generate_thermal_comfort_pptx_report(
+            df=df,
+            metadata=metadata
+        )
+        
+        city = metadata.get('city', 'Thermal_Comfort_Report')
+        filename = f"Thermal_Comfort_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
         
         return StreamingResponse(
             iter([pptx_buffer.getvalue()]),
@@ -446,6 +502,14 @@ def api_documentation():
                 "parameters": {
                     "file": "EPW weather file (required)",
                     "n_sectors": "Number of wind direction sectors (default: 16, options: 4, 8, 16)"
+                }
+            },
+            "thermal_comfort_report": {
+                "method": "POST",
+                "path": "/api/reports/thermal-comfort",
+                "description": "Generate thermal comfort analysis PowerPoint report from EPW file",
+                "parameters": {
+                    "file": "EPW weather file (required)"
                 }
             },
             "combined_analysis_report": {
