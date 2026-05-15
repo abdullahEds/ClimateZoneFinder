@@ -1541,8 +1541,8 @@ def generate_wind_pptx_report(
     try:
         from modules.wind_module import (
             prepare_wind_data, compute_wind_rose, compute_wind_statistics,
-            plot_wind_rose, plot_speed_heatmap, plot_direction_heatmap,
-            plot_speed_histogram, plot_climate_bubble
+            _SPEED_LABELS, _SPEED_COLORS, _SPEED_BINS,
+            _DIR_16, _DIR_8, _DIR_4, _MONTH_NAMES, _MONTH_COLORS,
         )
     except ImportError as e:
         slide = prs.slides.add_slide(BLANK_LAYOUT)
@@ -1575,6 +1575,153 @@ def generate_wind_pptx_report(
     rose_df, calm_pct = compute_wind_rose(wdf, n_sectors=n_sectors, exclude_calm=False)
     stats = compute_wind_statistics(wdf)
 
+    # ── Matplotlib chart helpers (no kaleido / Chrome required) ──────────────
+    def _mpl_wind_rose_png():
+        sector_width = 360.0 / n_sectors
+        if n_sectors == 16:
+            lbl = _DIR_16
+        elif n_sectors == 8:
+            lbl = _DIR_8
+        elif n_sectors == 4:
+            lbl = _DIR_4
+        else:
+            lbl = [f"{int(i * sector_width)}°" for i in range(n_sectors)]
+        angles = np.array([np.deg2rad(i * sector_width) for i in range(n_sectors)])
+        bar_w = np.deg2rad(sector_width) * 0.85
+        fig2, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(9, 7))
+        bottoms = np.zeros(n_sectors)
+        for i, sl in enumerate(_SPEED_LABELS):
+            subset = rose_df[rose_df["speed_bin"] == sl]
+            fm = dict(zip(subset["direction_label"], subset["frequency_pct"]))
+            freqs = np.array([fm.get(l, 0.0) for l in lbl])
+            ax.bar(angles, freqs, width=bar_w, bottom=bottoms,
+                   color=_SPEED_COLORS[i % len(_SPEED_COLORS)],
+                   label=f"{sl} m/s", alpha=0.9, linewidth=0.3, edgecolor="white")
+            bottoms += freqs
+        ax.set_theta_zero_location("N")
+        ax.set_theta_direction(-1)
+        ax.set_xticks(angles)
+        ax.set_xticklabels(lbl, fontsize=9)
+        ax.tick_params(axis="y", labelsize=8)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}%"))
+        ax.set_title("Wind Rose", fontsize=14, pad=20, color="#2c3e50", fontweight="bold")
+        ax.annotate(f"Calm\n{calm_pct:.1f}%", xy=(0, 0), xycoords="data",
+                    ha="center", va="center", fontsize=10, color="#555555")
+        ax.legend(loc="lower left", bbox_to_anchor=(1.05, 0.0),
+                  fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
+        plt.tight_layout()
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        plt.close(fig2)
+        return path
+
+    def _mpl_speed_heatmap_png():
+        pivot = wdf.pivot_table(values="wind_speed", index="dayofyear",
+                                columns="hour", aggfunc="mean")
+        fig2, ax = plt.subplots(figsize=(12, 5))
+        im = ax.imshow(pivot.values, aspect="auto", origin="lower", cmap="viridis",
+                       interpolation="nearest",
+                       extent=[pivot.columns.min() - 0.5, pivot.columns.max() + 0.5,
+                               pivot.index.min() - 0.5, pivot.index.max() + 0.5])
+        ax.set_xlabel("Hour of Day", fontsize=11)
+        ax.set_ylabel("Day of Year", fontsize=11)
+        ax.set_title("Wind Speed – Day × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+        ax.set_xticks(range(0, 24, 3))
+        plt.colorbar(im, ax=ax, label="m/s", shrink=0.8)
+        plt.tight_layout()
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        plt.close(fig2)
+        return path
+
+    def _mpl_direction_heatmap_png():
+        tmp_df = wdf.copy()
+        rad = np.deg2rad(tmp_df["wind_direction"])
+        tmp_df["_u"] = np.cos(rad)
+        tmp_df["_v"] = np.sin(rad)
+        up = tmp_df.pivot_table(values="_u", index="dayofyear", columns="hour", aggfunc="mean")
+        vp = tmp_df.pivot_table(values="_v", index="dayofyear", columns="hour", aggfunc="mean")
+        up, vp = up.align(vp, join="inner")
+        dir_deg = np.degrees(np.arctan2(vp.values, up.values)) % 360
+        fig2, ax = plt.subplots(figsize=(12, 5))
+        im = ax.imshow(dir_deg, aspect="auto", origin="lower", cmap="twilight",
+                       vmin=0, vmax=360, interpolation="nearest",
+                       extent=[up.columns.min() - 0.5, up.columns.max() + 0.5,
+                               up.index.min() - 0.5, up.index.max() + 0.5])
+        ax.set_xlabel("Hour of Day", fontsize=11)
+        ax.set_ylabel("Day of Year", fontsize=11)
+        ax.set_title("Wind Direction – Day × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+        ax.set_xticks(range(0, 24, 3))
+        cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_ticks([0, 90, 180, 270, 360])
+        cbar.set_ticklabels(["N 0°", "E 90°", "S 180°", "W 270°", "N 360°"])
+        cbar.set_label("Direction")
+        plt.tight_layout()
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        plt.close(fig2)
+        return path
+
+    def _mpl_speed_histogram_png():
+        total = len(wdf)
+        labels, pcts = [], []
+        for i in range(len(_SPEED_BINS) - 1):
+            lo, hi = _SPEED_BINS[i], _SPEED_BINS[i + 1]
+            count = int(((wdf["wind_speed"] >= lo) & (wdf["wind_speed"] < hi)).sum())
+            labels.append(_SPEED_LABELS[i])
+            pcts.append(count / total * 100.0 if total > 0 else 0.0)
+        fig2, ax = plt.subplots(figsize=(10, 5))
+        bars = ax.bar(labels, pcts, color=_SPEED_COLORS[:len(labels)], alpha=0.9, edgecolor="white")
+        for bar, pct in zip(bars, pcts):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                    f"{pct:.1f}%", ha="center", va="bottom", fontsize=10)
+        ax.set_xlabel("Wind Speed Bin (m/s)", fontsize=11)
+        ax.set_ylabel("Frequency (%)", fontsize=11)
+        ax.set_title("Wind Speed Distribution", fontsize=14, color="#2c3e50", fontweight="bold")
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0f}%"))
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        plt.tight_layout()
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        plt.close(fig2)
+        return path
+
+    def _mpl_climate_bubble_png():
+        needed = {"dry_bulb_temperature", "relative_humidity", "wind_speed", "month"}
+        fig2, ax = plt.subplots(figsize=(10, 6))
+        if not needed.issubset(wdf.columns):
+            ax.text(0.5, 0.5, "Missing columns for bubble chart",
+                    ha="center", va="center", transform=ax.transAxes, fontsize=13)
+        else:
+            tmp_df = wdf.dropna(subset=["dry_bulb_temperature", "relative_humidity", "wind_speed"]).copy()
+            max_spd = float(tmp_df["wind_speed"].max())
+            scale = 500.0 / max_spd if max_spd > 0 else 50.0
+            for m in range(1, 13):
+                mdata = tmp_df[tmp_df["month"] == m]
+                if mdata.empty:
+                    continue
+                ax.scatter(mdata["dry_bulb_temperature"], mdata["relative_humidity"],
+                           s=(mdata["wind_speed"] + 0.3) * scale,
+                           c=_MONTH_COLORS[(m - 1) % len(_MONTH_COLORS)],
+                           alpha=0.45, linewidths=0, label=_MONTH_NAMES[m - 1])
+            ax.set_xlabel("Dry Bulb Temperature (°C)", fontsize=11)
+            ax.set_ylabel("Relative Humidity (%)", fontsize=11)
+            ax.set_ylim(0, 105)
+            ax.legend(title="Month", fontsize=9, title_fontsize=9,
+                      loc="center left", bbox_to_anchor=(1, 0.5))
+            ax.text(0.01, 0.98, "Bubble size = wind speed (m/s)",
+                    transform=ax.transAxes, fontsize=10, color="#888", va="top")
+        ax.set_title("Temperature – Humidity – Wind Speed", fontsize=14,
+                     color="#2c3e50", fontweight="bold")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        plt.tight_layout()
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        plt.close(fig2)
+        return path
+
     # ── WIND ROSE SLIDE ───────────────────────────────────────────────────────
     def _wind_rose_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
@@ -1582,20 +1729,11 @@ def generate_wind_pptx_report(
         _divider(slide, 0.62)
 
         try:
-            fig = plot_wind_rose(rose_df, calm_pct, n_sectors)
-            
-            # Convert Plotly to static image
-            try:
-                import plotly.io as pio
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                tmp.close()
-                pio.write_image(fig, tmp.name, width=1200, height=600)
-                
-                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                         width=Inches(SW - 0.54), height=Inches(5.9))
-                os.unlink(tmp.name)
-            except Exception as pe:
-                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+            img_path = _mpl_wind_rose_png()
+            chart_w = 7.5
+            slide.shapes.add_picture(img_path, Inches((SW - chart_w) / 2), Inches(0.80),
+                                     width=Inches(chart_w))
+            os.unlink(img_path)
         except Exception as e:
             _err(slide, f"Wind rose: {str(e)[:50]}")
 
@@ -1610,19 +1748,10 @@ def generate_wind_pptx_report(
         _divider(slide, 0.62)
 
         try:
-            fig = plot_speed_heatmap(wdf)
-            
-            try:
-                import plotly.io as pio
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                tmp.close()
-                pio.write_image(fig, tmp.name, width=1200, height=600)
-                
-                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                         width=Inches(SW - 0.54), height=Inches(5.9))
-                os.unlink(tmp.name)
-            except Exception as pe:
-                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+            img_path = _mpl_speed_heatmap_png()
+            slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                     width=Inches(SW - 0.54), height=Inches(5.9))
+            os.unlink(img_path)
         except Exception as e:
             _err(slide, f"Speed heatmap: {str(e)[:50]}")
 
@@ -1637,19 +1766,10 @@ def generate_wind_pptx_report(
         _divider(slide, 0.62)
 
         try:
-            fig = plot_direction_heatmap(wdf)
-            
-            try:
-                import plotly.io as pio
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                tmp.close()
-                pio.write_image(fig, tmp.name, width=1200, height=600)
-                
-                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                         width=Inches(SW - 0.54), height=Inches(5.9))
-                os.unlink(tmp.name)
-            except Exception as pe:
-                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+            img_path = _mpl_direction_heatmap_png()
+            slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                     width=Inches(SW - 0.54), height=Inches(5.9))
+            os.unlink(img_path)
         except Exception as e:
             _err(slide, f"Direction heatmap: {str(e)[:50]}")
 
@@ -1664,19 +1784,10 @@ def generate_wind_pptx_report(
         _divider(slide, 0.62)
 
         try:
-            fig = plot_speed_histogram(wdf)
-            
-            try:
-                import plotly.io as pio
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                tmp.close()
-                pio.write_image(fig, tmp.name, width=1200, height=500)
-                
-                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                         width=Inches(SW - 0.54), height=Inches(5.9))
-                os.unlink(tmp.name)
-            except Exception as pe:
-                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+            img_path = _mpl_speed_histogram_png()
+            slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                     width=Inches(SW - 0.54), height=Inches(5.9))
+            os.unlink(img_path)
         except Exception as e:
             _err(slide, f"Speed histogram: {str(e)[:50]}")
 
@@ -1691,19 +1802,10 @@ def generate_wind_pptx_report(
         _divider(slide, 0.62)
 
         try:
-            fig = plot_climate_bubble(wdf)
-            
-            try:
-                import plotly.io as pio
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                tmp.close()
-                pio.write_image(fig, tmp.name, width=1200, height=650)
-                
-                slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                         width=Inches(SW - 0.54), height=Inches(5.9))
-                os.unlink(tmp.name)
-            except Exception as pe:
-                _err(slide, f"Plotly conversion failed: {str(pe)[:40]}")
+            img_path = _mpl_climate_bubble_png()
+            slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                     width=Inches(SW - 0.54), height=Inches(5.9))
+            os.unlink(img_path)
         except Exception as e:
             _err(slide, f"Climate bubble: {str(e)[:50]}")
 
