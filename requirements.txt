@@ -9,5 +9,4 @@ rich==13.9.4
 openpyxl
 plotly
 python-pptx
-kaleido
 pvlib
