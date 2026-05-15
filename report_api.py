@@ -323,7 +323,6 @@ async def generate_combined_report(
     rad_threshold: float = Form(315.0, description="Radiation threshold (W/m²), default: 315.0"),
     design_cutoff_angle: float = Form(45.0, description="Design cutoff angle (°), default: 45.0"),
     n_sectors: int = Form(16, description="Number of wind direction sectors (default: 16, options: 4, 8, 16)"),
-    include_thermal_comfort: bool = Form(False, description="Include thermal comfort analysis (default: False)"),
 ):
     """
     Generate a combined Climate & Shading & Wind & Thermal Comfort Analysis PowerPoint report from an EPW file.
@@ -334,7 +333,7 @@ async def generate_combined_report(
     - Climate Analysis: Dry Bulb Temperature, Relative Humidity, Sun Path
     - Shading Analysis: Thermal/Radiation Matrix, Sun Path Shading, Orientation Analysis, Shading Masks
     - Wind Analysis: Wind Rose, Speed & Direction Heatmaps, Wind Speed Distribution, Climate Bubble Chart, Wind Statistics
-    - Thermal Comfort Analysis (optional): Comfort Heatmap, Psychrometric Chart, Design Strategies, Degree Hours, Adaptive Comfort, Performance Summary
+    - Thermal Comfort Analysis: Comfort Heatmap, Psychrometric Chart, Design Strategies, Degree Hours, Adaptive Comfort, Performance Summary, Design Recommendations
     - Annexure with disclaimer and acknowledgements
     
     Parameters:
@@ -347,9 +346,8 @@ async def generate_combined_report(
     - rad_threshold: Solar radiation threshold for shading analysis (W/m², default: 315.0)
     - design_cutoff_angle: Vertical design angle for shading calculations (°, default: 45.0)
     - n_sectors: Number of compass sectors for wind rose (default: 16, options: 4, 8, 16)
-    - include_thermal_comfort: Include thermal comfort analysis slides (default: False)
     
-    Returns: PowerPoint report file with combined climate, shading, wind, and optional thermal comfort analysis
+    Returns: PowerPoint report file with combined climate, shading, wind, and thermal comfort analysis
     """
     try:
         # Read uploaded file
@@ -391,7 +389,7 @@ async def generate_combined_report(
             rad_threshold=rad_threshold,
             n_sectors=n_sectors,
             design_cutoff_angle=design_cutoff_angle,
-            include_thermal_comfort=include_thermal_comfort,
+            include_thermal_comfort=True,
         )
         
         city = metadata.get('city', 'Combined_Report')

@@ -1496,6 +1496,8 @@ def generate_combined_pptx_report(
             tdf = compute_psychrometric_simple(tdf)
             tdf = compute_adaptive_comfort_simple(tdf)
             tdf = classify_comfort_simple(tdf)
+            # Add strategy column based on comfort category
+            tdf["strategy"] = tdf["comfort_cat"]
         except Exception as e:
             slide = prs.slides.add_slide(BLANK_LAYOUT)
             _add_slide_title(slide, "Thermal Comfort Analysis")
@@ -1623,6 +1625,111 @@ def generate_combined_pptx_report(
             _add_logo(slide)
 
         _performance_summary_slide()
+
+        # ── Design Recommendations Slide ────────────────────────────────────
+        def _design_recommendations_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, "Design Recommendations & Strategies")
+            _add_divider(slide, 0.62)
+            
+            tb = slide.shapes.add_textbox(Inches(0.27), Inches(0.75), Inches(SW - 0.54), Inches(6.0))
+            tf = tb.text_frame
+            tf.word_wrap = True
+            
+            # Calculate summary statistics
+            try:
+                pct_comfortable = (tdf["comfort_cat"] == "Comfortable").sum() / len(tdf) * 100
+                pct_hot = (tdf["comfort_cat"] == "Too Hot").sum() / len(tdf) * 100
+                pct_cold = (tdf["comfort_cat"] == "Too Cold").sum() / len(tdf) * 100
+                mean_rh = pd.to_numeric(tdf["relative_humidity"], errors="coerce").mean()
+                
+                p = tf.paragraphs[0]
+                p.text = "Climate Comfort Profile"
+                p.font.size = Pt(14)
+                p.font.bold = True
+                p.font.color.rgb = TITLE_RED
+                p.space_after = Pt(6)
+                
+                p = tf.add_paragraph()
+                p.text = f"• Comfortable hours: {pct_comfortable:.1f}%  |  Overheating: {pct_hot:.1f}%  |  Undercooling: {pct_cold:.1f}%"
+                p.font.size = Pt(11)
+                p.font.color.rgb = DARK_GREY
+                p.space_after = Pt(4)
+                
+                p = tf.add_paragraph()
+                p.text = f"• Mean Relative Humidity: {mean_rh:.1f}%"
+                p.font.size = Pt(11)
+                p.font.color.rgb = DARK_GREY
+                p.space_after = Pt(10)
+                
+                p = tf.add_paragraph()
+                p.text = "Key Design Strategies"
+                p.font.size = Pt(14)
+                p.font.bold = True
+                p.font.color.rgb = TITLE_RED
+                p.space_before = Pt(4)
+                p.space_after = Pt(6)
+                
+                if pct_comfortable < 40:
+                    if pct_hot > pct_cold:
+                        p = tf.add_paragraph()
+                        p.text = "• Priority: Cooling strategies – Implement high-performance envelope, external shading, and natural ventilation"
+                        p.font.size = Pt(11)
+                        p.font.color.rgb = DARK_GREY
+                        p.space_after = Pt(3)
+                        
+                        p = tf.add_paragraph()
+                        p.text = "• Consider nighttime cooling recovery and thermal mass activation"
+                        p.font.size = Pt(11)
+                        p.font.color.rgb = DARK_GREY
+                        p.space_after = Pt(3)
+                    else:
+                        p = tf.add_paragraph()
+                        p.text = "• Priority: Heating strategies – Maximize solar heat gain during winter with south-facing glazing"
+                        p.font.size = Pt(11)
+                        p.font.color.rgb = DARK_GREY
+                        p.space_after = Pt(3)
+                        
+                        p = tf.add_paragraph()
+                        p.text = "• Ensure robust thermal insulation and minimize infiltration losses"
+                        p.font.size = Pt(11)
+                        p.font.color.rgb = DARK_GREY
+                        p.space_after = Pt(3)
+                else:
+                    p = tf.add_paragraph()
+                    p.text = "• Climate is generally favorable – Prioritize passive design with natural ventilation and daylighting"
+                    p.font.size = Pt(11)
+                    p.font.color.rgb = DARK_GREY
+                    p.space_after = Pt(3)
+                
+                if mean_rh > 65:
+                    p = tf.add_paragraph()
+                    p.text = "• High humidity detected – Ensure adequate dehumidification and mold risk mitigation"
+                    p.font.size = Pt(11)
+                    p.font.color.rgb = DARK_GREY
+                    p.space_after = Pt(3)
+                elif mean_rh < 30:
+                    p = tf.add_paragraph()
+                    p.text = "• Low humidity detected – Humidification may be required in heating season for occupant comfort"
+                    p.font.size = Pt(11)
+                    p.font.color.rgb = DARK_GREY
+                    p.space_after = Pt(3)
+                
+                p = tf.add_paragraph()
+                p.text = "• Adaptive Comfort – Leverage occupant behavior (clothing, behavior) to expand acceptable temperature ranges"
+                p.font.size = Pt(11)
+                p.font.color.rgb = DARK_GREY
+                p.space_after = Pt(0)
+                
+            except Exception as e:
+                p = tf.paragraphs[0]
+                p.text = f"Error generating recommendations: {str(e)[:40]}"
+                p.font.size = Pt(11)
+                p.font.color.rgb = TITLE_RED
+            
+            _add_logo(slide)
+        
+        _design_recommendations_slide()
 
     _prepare_thermal_comfort_slides()
 

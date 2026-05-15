@@ -509,6 +509,7 @@ with col_left:
 
         # Generate combined report with Climate + Shading + Assumptions
         # Use full year (Jan 1 - Dec 31) and full day (0-23 hours) by default
+        # Always include thermal comfort analysis
         report_bytes = generate_combined_pptx_report(
             df, _full_year_start, _full_year_end, _full_day_start_hour, _full_day_end_hour,
             selected_parameter, metadata=metadata,
@@ -516,7 +517,9 @@ with col_left:
             rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
             design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
             n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
+            include_thermal_comfort=True,
         )
+        
         st.download_button(
             label="⬇️ Download Combined Climate & Shading Report",
             data=report_bytes,
