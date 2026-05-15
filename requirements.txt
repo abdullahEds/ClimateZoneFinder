@@ -8,6 +8,6 @@ altair==4.2.2
 rich==13.9.4
 openpyxl
 plotly
-kaleido==0.1.0.post1
+# kaleido==0.1.0.post1
 python-pptx
 pvlib
