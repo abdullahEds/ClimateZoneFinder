@@ -1259,17 +1259,22 @@ def generate_combined_pptx_report(
             return path
 
         def _mpl_speed_heatmap_png():
-            pivot = wdf.pivot_table(values="wind_speed", index="dayofyear",
-                                    columns="hour", aggfunc="mean")
+            pivot = wdf.pivot_table(values="wind_speed", index="hour",
+                                    columns="month", aggfunc="mean")
+            for m in range(1, 13):
+                if m not in pivot.columns:
+                    pivot[m] = np.nan
+            pivot = pivot[sorted(pivot.columns)]
+            month_labels = [_MONTH_NAMES[m - 1] for m in sorted(pivot.columns)]
             fig2, ax = plt.subplots(figsize=(12, 5))
-            im = ax.imshow(pivot.values, aspect="auto", origin="lower", cmap="viridis",
-                           interpolation="nearest",
-                           extent=[pivot.columns.min() - 0.5, pivot.columns.max() + 0.5,
-                                   pivot.index.min() - 0.5, pivot.index.max() + 0.5])
-            ax.set_xlabel("Hour of Day", fontsize=11)
-            ax.set_ylabel("Day of Year", fontsize=11)
-            ax.set_title("Wind Speed – Day × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
-            ax.set_xticks(range(0, 24, 3))
+            im = ax.imshow(pivot.values, aspect="auto", cmap="viridis", interpolation="nearest")
+            ax.set_xlabel("Month", fontsize=11)
+            ax.set_ylabel("Hour of Day", fontsize=11)
+            ax.set_title("Wind Speed – Month × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+            ax.set_xticks(range(12))
+            ax.set_xticklabels(month_labels, fontsize=9)
+            ax.set_yticks(range(0, 24, 3))
+            ax.set_yticklabels([f"{h:02d}:00" for h in range(0, 24, 3)], fontsize=9)
             plt.colorbar(im, ax=ax, label="m/s", shrink=0.8)
             plt.tight_layout()
             path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
@@ -1282,19 +1287,22 @@ def generate_combined_pptx_report(
             rad = np.deg2rad(tmp_df["wind_direction"])
             tmp_df["_u"] = np.cos(rad)
             tmp_df["_v"] = np.sin(rad)
-            up = tmp_df.pivot_table(values="_u", index="dayofyear", columns="hour", aggfunc="mean")
-            vp = tmp_df.pivot_table(values="_v", index="dayofyear", columns="hour", aggfunc="mean")
+            up = tmp_df.pivot_table(values="_u", index="hour", columns="month", aggfunc="mean")
+            vp = tmp_df.pivot_table(values="_v", index="hour", columns="month", aggfunc="mean")
             up, vp = up.align(vp, join="inner")
             dir_deg = np.degrees(np.arctan2(vp.values, up.values)) % 360
+            month_cols = sorted(up.columns.tolist())
+            month_labels = [_MONTH_NAMES[m - 1] for m in month_cols]
             fig2, ax = plt.subplots(figsize=(12, 5))
-            im = ax.imshow(dir_deg, aspect="auto", origin="lower", cmap="twilight",
-                           vmin=0, vmax=360, interpolation="nearest",
-                           extent=[up.columns.min() - 0.5, up.columns.max() + 0.5,
-                                   up.index.min() - 0.5, up.index.max() + 0.5])
-            ax.set_xlabel("Hour of Day", fontsize=11)
-            ax.set_ylabel("Day of Year", fontsize=11)
-            ax.set_title("Wind Direction – Day × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
-            ax.set_xticks(range(0, 24, 3))
+            im = ax.imshow(dir_deg, aspect="auto", cmap="twilight",
+                           vmin=0, vmax=360, interpolation="nearest")
+            ax.set_xlabel("Month", fontsize=11)
+            ax.set_ylabel("Hour of Day", fontsize=11)
+            ax.set_title("Wind Direction – Month × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+            ax.set_xticks(range(len(month_cols)))
+            ax.set_xticklabels(month_labels, fontsize=9)
+            ax.set_yticks(range(0, 24, 3))
+            ax.set_yticklabels([f"{h:02d}:00" for h in range(0, 24, 3)], fontsize=9)
             cbar = plt.colorbar(im, ax=ax, shrink=0.8)
             cbar.set_ticks([0, 90, 180, 270, 360])
             cbar.set_ticklabels(["N 0°", "E 90°", "S 180°", "W 270°", "N 360°"])
@@ -1382,12 +1390,72 @@ def generate_combined_pptx_report(
 
             _add_logo(slide)
 
+        def _mpl_single_season_rose_png(rose_df_s, calm_pct_s, season_name):
+            sector_width = 360.0 / n_sectors
+            if n_sectors == 16:
+                lbl = _DIR_16
+            elif n_sectors == 8:
+                lbl = _DIR_8
+            elif n_sectors == 4:
+                lbl = _DIR_4
+            else:
+                lbl = [f"{int(i * sector_width)}°" for i in range(n_sectors)]
+            angles = np.array([np.deg2rad(i * sector_width) for i in range(n_sectors)])
+            bar_w = np.deg2rad(sector_width) * 0.85
+            fig2, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(9, 7))
+            bottoms = np.zeros(n_sectors)
+            for i, sl in enumerate(_SPEED_LABELS):
+                subset = rose_df_s[rose_df_s["speed_bin"] == sl]
+                fm = dict(zip(subset["direction_label"], subset["frequency_pct"]))
+                freqs = np.array([fm.get(l, 0.0) for l in lbl])
+                ax.bar(angles, freqs, width=bar_w, bottom=bottoms,
+                       color=_SPEED_COLORS[i % len(_SPEED_COLORS)],
+                       label=f"{sl} m/s", alpha=0.9, linewidth=0.3, edgecolor="white")
+                bottoms += freqs
+            ax.set_theta_zero_location("N")
+            ax.set_theta_direction(-1)
+            ax.set_xticks(angles)
+            ax.set_xticklabels(lbl, fontsize=9)
+            ax.tick_params(axis="y", labelsize=8)
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}%"))
+            ax.set_title(f"{season_name} Wind Rose", fontsize=14, pad=20,
+                         color="#2c3e50", fontweight="bold")
+            ax.annotate(f"Calm\n{calm_pct_s:.1f}%", xy=(0, 0), xycoords="data",
+                        ha="center", va="center", fontsize=10, color="#555555")
+            ax.legend(loc="lower left", bbox_to_anchor=(1.05, 0.0),
+                      fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
+            plt.tight_layout()
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            plt.close(fig2)
+            return path
+
         _wind_rose_slide()
+
+        # ── Seasonal Wind Rose Slides (one slide per season) ────────────────
+        for _sname, _smonths in [("Winter", [12, 1, 2]), ("Spring", [3, 4, 5]),
+                                  ("Summer", [6, 7, 8]),  ("Fall",   [9, 10, 11])]:
+            _sdf = wdf[wdf["month"].isin(_smonths)].copy()
+            if _sdf.empty:
+                continue
+            _srose, _scalm = compute_wind_rose(_sdf, n_sectors=n_sectors, exclude_calm=False)
+            _sslide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(_sslide, f"Wind Rose – {_sname}")
+            _add_divider(_sslide, 0.62)
+            try:
+                _spath = _mpl_single_season_rose_png(_srose, _scalm, _sname)
+                _cw = 7.5
+                _sslide.shapes.add_picture(_spath, Inches((SW - _cw) / 2), Inches(0.80),
+                                           width=Inches(_cw))
+                os.unlink(_spath)
+            except Exception as _se:
+                _err_box(_sslide, _se)
+            _add_logo(_sslide)
 
         # ── Wind Speed Heatmap Slide ────────────────────────────────────────
         def _speed_heatmap_slide():
             slide = prs.slides.add_slide(BLANK_LAYOUT)
-            _add_slide_title(slide, "Wind Speed Heatmap (Day × Hour)")
+            _add_slide_title(slide, "Wind Speed Heatmap (Month × Hour)")
             _add_divider(slide, 0.62)
 
             try:
@@ -1405,7 +1473,7 @@ def generate_combined_pptx_report(
         # ── Wind Direction Heatmap Slide ────────────────────────────────────
         def _direction_heatmap_slide():
             slide = prs.slides.add_slide(BLANK_LAYOUT)
-            _add_slide_title(slide, "Wind Direction Heatmap (Day × Hour)")
+            _add_slide_title(slide, "Wind Direction Heatmap (Month × Hour)")
             _add_divider(slide, 0.62)
 
             try:

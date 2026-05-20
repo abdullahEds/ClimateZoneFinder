@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 # import streamlit as st
 
 
@@ -318,25 +319,146 @@ def plot_wind_rose(
     return fig
 
 
+# ─── Plot: Seasonal Wind Rose ─────────────────────────────────────────────────
+
+def plot_seasonal_wind_roses(
+    wdf: pd.DataFrame,
+    n_sectors: int = 16,
+) -> go.Figure:
+    """2×2 panel of seasonal wind roses: Winter / Spring / Summer / Fall.
+
+    Uses the same speed-bin colour scheme as the annual wind rose.
+    """
+    SEASONS = [
+        ("Winter", [12, 1, 2]),
+        ("Spring", [3, 4, 5]),
+        ("Summer", [6, 7, 8]),
+        ("Fall",   [9, 10, 11]),
+    ]
+
+    sector_width = 360.0 / n_sectors
+    if n_sectors == 16:
+        label_list = _DIR_16
+    elif n_sectors == 8:
+        label_list = _DIR_8
+    elif n_sectors == 4:
+        label_list = _DIR_4
+    else:
+        label_list = [f"{int(i * sector_width)}°" for i in range(n_sectors)]
+
+    label_to_angle = {lbl: i * sector_width for i, lbl in enumerate(label_list)}
+    sector_angles  = [i * sector_width for i in range(n_sectors)]
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        specs=[[{"type": "polar"}, {"type": "polar"}],
+               [{"type": "polar"}, {"type": "polar"}]],
+        subplot_titles=[s[0] for s in SEASONS],
+        horizontal_spacing=0.05,
+        vertical_spacing=0.10,
+    )
+
+    polar_ids = ["polar", "polar2", "polar3", "polar4"]
+
+    for idx, (season_name, months) in enumerate(SEASONS):
+        row      = idx // 2 + 1
+        col      = idx % 2 + 1
+        show_leg = (idx == 0)
+
+        season_df = wdf[wdf["month"].isin(months)].copy()
+        if season_df.empty:
+            continue
+
+        rose_df_s, calm_pct_s = compute_wind_rose(
+            season_df, n_sectors=n_sectors, exclude_calm=False
+        )
+
+        fig.layout.annotations[idx].text = (
+            f"<b>{season_name}</b>  ·  Calm {calm_pct_s:.1f}%"
+        )
+
+        for i, spd_lbl in enumerate(_SPEED_LABELS):
+            subset   = rose_df_s[rose_df_s["speed_bin"] == spd_lbl]
+            freq_map = dict(zip(subset["direction_label"], subset["frequency_pct"]))
+            angles   = [label_to_angle[lbl] for lbl in label_list]
+            freqs    = [freq_map.get(lbl, 0.0) for lbl in label_list]
+
+            fig.add_trace(
+                go.Barpolar(
+                    r                 = freqs,
+                    theta             = angles,
+                    name              = f"{spd_lbl} m/s",
+                    marker_color      = _SPEED_COLORS[i % len(_SPEED_COLORS)],
+                    marker_line_color = "white",
+                    marker_line_width = 0.5,
+                    opacity           = 0.9,
+                    showlegend        = show_leg,
+                    legendgroup       = spd_lbl,
+                    hovertemplate     = (
+                        f"<b>%{{theta:.0f}}°</b><br>%{{r:.2f}}%"
+                        f"<extra>{spd_lbl} m/s</extra>"
+                    ),
+                ),
+                row=row, col=col,
+            )
+
+    polar_style = dict(
+        radialaxis=dict(
+            visible       = True,
+            ticksuffix    = "%",
+            gridcolor     = "rgba(128,128,128,0.3)",
+            linecolor     = "rgba(128,128,128,0.3)",
+            tickfont_size = 9,
+        ),
+        angularaxis=dict(
+            rotation      = 90,
+            direction     = "clockwise",
+            tickmode      = "array",
+            tickvals      = sector_angles,
+            ticktext      = label_list,
+            tickfont_size = 9,
+            gridcolor     = "rgba(128,128,128,0.3)",
+        ),
+    )
+
+    fig.update_layout(
+        **{pid: polar_style for pid in polar_ids},
+        height     = 900,
+        template   = "plotly_white",
+        showlegend = True,
+        legend     = dict(
+            title       = "Wind Speed",
+            orientation = "v",
+            x=1.02, y=0.5,
+            font_size   = 10,
+        ),
+    )
+    return fig
+
+
 # ─── Plot: Speed Heatmap ──────────────────────────────────────────────────────
 
 def plot_speed_heatmap(wdf: pd.DataFrame) -> go.Figure:
-    """Wind speed heatmap: day-of-year (rows) × hour-of-day (columns).
+    """Wind speed heatmap: month (x-axis) × hour-of-day (y-axis).
 
-    Each cell = mean wind speed for that day × hour combination.
+    Each cell = mean wind speed for that month × hour combination.
     Color scale: Viridis.
     """
     pivot = wdf.pivot_table(
         values  = "wind_speed",
-        index   = "dayofyear",
-        columns = "hour",
+        index   = "hour",
+        columns = "month",
         aggfunc = "mean",
     )
+    for m in range(1, 13):
+        if m not in pivot.columns:
+            pivot[m] = np.nan
+    pivot = pivot[sorted(pivot.columns)]
 
     fig = px.imshow(
         pivot,
-        labels = dict(x="Hour of Day", y="Day of Year", color="m/s"),
-        title  = "Wind Speed – Day × Hour",
+        labels = dict(x="Month", y="Hour of Day", color="m/s"),
+        title  = "Wind Speed – Month × Hour",
         color_continuous_scale = "Viridis",
         aspect = "auto",
         origin = "lower",
@@ -344,10 +466,14 @@ def plot_speed_heatmap(wdf: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         height   = 400,
         template = "plotly_white",
-        xaxis    = dict(title="Hour of Day", tickmode="linear", dtick=3),
-        yaxis    = dict(title="Day of Year"),
+        xaxis    = dict(
+            title    = "Month",
+            tickmode = "array",
+            tickvals = list(range(1, 13)),
+            ticktext = _MONTH_NAMES,
+        ),
+        yaxis    = dict(title="Hour of Day"),
         coloraxis_colorbar = dict(title="m/s"),
-        # title    = dict(x=0.5),
     )
     return fig
 
@@ -355,36 +481,34 @@ def plot_speed_heatmap(wdf: pd.DataFrame) -> go.Figure:
 # ─── Plot: Direction Heatmap ──────────────────────────────────────────────────
 
 def plot_direction_heatmap(wdf: pd.DataFrame) -> go.Figure:
-    """Wind direction heatmap: day-of-year (rows) × hour-of-day (columns).
+    """Wind direction heatmap: month (x-axis) × hour-of-day (y-axis).
 
     Uses VECTOR (circular) averaging to handle the 0/360° discontinuity.
-
-    Algorithm
-    ---------
-    1. Convert each direction θ to unit vector:  u = cos(θ),  v = sin(θ).
-    2. Compute mean u and mean v for each cell.
-    3. Recover mean angle:  θ_mean = degrees(atan2(mean_v, mean_u)) % 360.
-
     Color scale: twilight (cyclic, perceptually uniform for angular data).
     """
     tmp = wdf.copy()
-    rad      = np.deg2rad(tmp["wind_direction"])
+    rad       = np.deg2rad(tmp["wind_direction"])
     tmp["_u"] = np.cos(rad)
     tmp["_v"] = np.sin(rad)
 
-    u_pivot = tmp.pivot_table(values="_u", index="dayofyear", columns="hour", aggfunc="mean")
-    v_pivot = tmp.pivot_table(values="_v", index="dayofyear", columns="hour", aggfunc="mean")
+    u_pivot = tmp.pivot_table(values="_u", index="hour", columns="month", aggfunc="mean")
+    v_pivot = tmp.pivot_table(values="_v", index="hour", columns="month", aggfunc="mean")
 
-    # Align on shared index / columns (important when month-filtered)
     u_pivot, v_pivot = u_pivot.align(v_pivot, join="inner")
 
     dir_deg   = np.degrees(np.arctan2(v_pivot.values, u_pivot.values)) % 360
     dir_pivot = pd.DataFrame(dir_deg, index=u_pivot.index, columns=u_pivot.columns)
 
+    for m in range(1, 13):
+        if m not in dir_pivot.columns:
+            dir_pivot[m] = np.nan
+    dir_pivot    = dir_pivot[sorted(dir_pivot.columns)]
+    month_cols   = sorted(dir_pivot.columns.tolist())
+
     fig = px.imshow(
         dir_pivot,
-        labels      = dict(x="Hour of Day", y="Day of Year", color="Direction°"),
-        title       = "Wind Direction – Day × Hour",
+        labels      = dict(x="Month", y="Hour of Day", color="Direction°"),
+        title       = "Wind Direction – Month × Hour",
         color_continuous_scale = "twilight",
         range_color = [0, 360],
         aspect      = "auto",
@@ -393,14 +517,18 @@ def plot_direction_heatmap(wdf: pd.DataFrame) -> go.Figure:
     fig.update_layout(
         height   = 400,
         template = "plotly_white",
-        xaxis    = dict(title="Hour of Day", tickmode="linear", dtick=3),
-        yaxis    = dict(title="Day of Year"),
+        xaxis    = dict(
+            title    = "Month",
+            tickmode = "array",
+            tickvals = month_cols,
+            ticktext = [_MONTH_NAMES[m - 1] for m in month_cols],
+        ),
+        yaxis    = dict(title="Hour of Day"),
         coloraxis_colorbar=dict(
             title    = "Direction",
             tickvals = [0, 90, 180, 270, 360],
             ticktext = ["N 0°", "E 90°", "S 180°", "W 270°", "N 360°"],
         ),
-        # title = dict(x=0.5),
     )
     return fig
 
@@ -686,6 +814,12 @@ def render_wind_analysis(
     # ── 1. Wind Rose ──────────────────────────────────────────────────────────
     st.plotly_chart(
         plot_wind_rose(rose_df, calm_pct, n_sectors),
+        use_container_width=True,
+    )
+
+    # ── 1b. Seasonal Wind Rose ────────────────────────────────────────────────
+    st.plotly_chart(
+        plot_seasonal_wind_roses(wdf, n_sectors),
         use_container_width=True,
     )
 
