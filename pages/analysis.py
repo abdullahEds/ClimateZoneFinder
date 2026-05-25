@@ -379,7 +379,12 @@ with col_left:
         )
 
     elif selected_parameter == "Thermal Comfort":
-        hour_range = (0, 23)
+        st.markdown('<div class="control-section-header">⏰ Time Range (Hours)</div>', unsafe_allow_html=True)
+        hour_range = st.slider(
+            "Select hours (start - end)", min_value=0, max_value=23,
+            value=(0, 23), step=1, key="hour_range",
+            label_visibility="collapsed", width=300,
+        )
 
         st.markdown('<div class="control-section-header">🌡️ Comfort Model</div>', unsafe_allow_html=True)
         st.selectbox(
@@ -553,11 +558,14 @@ with col_right:
     elif selected_parameter == "Thermal Comfort":
         _s = st.session_state.start_month_idx + 1
         _e = st.session_state.end_month_idx + 1
+        _sh, _eh = hour_range
         thermal_comfort_module.render(
             df,
             months           = list(range(_s, _e + 1)),
             comfort_model    = st.session_state.get("tc_comfort_model", "Both"),
             air_speed_adjust = bool(st.session_state.get("tc_air_speed_adjust", False)),
+            start_hour       = _sh,
+            end_hour         = _eh,
         )
 
     elif selected_parameter == "Ventilation":
