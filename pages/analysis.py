@@ -32,7 +32,7 @@ from modules.ppt_report import generate_pptx_report, generate_shading_pptx_repor
 from modules.combined_report import generate_combined_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
-from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module
+from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module, rainfall_module
 
 # ─── Page configuration ───────────────────────────────────────────────────────
 
@@ -291,7 +291,7 @@ with col_left:
     st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
-        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort"],
+        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort", "Rainfall"],
         label_visibility="collapsed",
         key="parameter_selector",
         width=300,
@@ -402,6 +402,47 @@ with col_left:
             value=False,
             key="tc_air_speed_adjust",
             help="Raise upper comfort limit by 1.5°C when wind speed > 1.5 m/s",
+        )
+
+    elif selected_parameter == "Rainfall":
+        hour_range = (0, 23)
+
+        st.markdown('<div class="control-section-header">🌧️ Station</div>',
+                    unsafe_allow_html=True)
+        st.selectbox(
+            "Station",
+            options=list(rainfall_module.STATIONS.keys()),
+            key="rainfall_station",
+            label_visibility="collapsed",
+            width=300,
+        )
+
+        st.markdown('<div class="control-section-header">📅 Year</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Year", value=2023, min_value=1950, max_value=2024,
+            step=1, key="rainfall_year",
+            label_visibility="collapsed", width=300,
+        )
+
+        st.markdown('<div class="control-section-header">⚠️ Thresholds</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Heavy rain threshold (mm/day)",
+            value=50.0, step=5.0, min_value=10.0, max_value=200.0,
+            key="rainfall_heavy_threshold",
+            help="Days at or above this are classified as extreme rain events",
+            width=300,
+        )
+
+        st.markdown('<div class="control-section-header">🏠 Building</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Roof area (m²)",
+            value=200.0, step=10.0, min_value=10.0, max_value=50000.0,
+            key="rainfall_roof_area",
+            help="Used to estimate monthly roof runoff volume",
+            width=300,
         )
 
     elif selected_parameter == "Ventilation":
@@ -566,6 +607,20 @@ with col_right:
             air_speed_adjust = bool(st.session_state.get("tc_air_speed_adjust", False)),
             start_hour       = _sh,
             end_hour         = _eh,
+        )
+
+    elif selected_parameter == "Rainfall":
+        rainfall_module.render(
+            station_id  = rainfall_module.STATIONS[st.session_state.get(
+                              "rainfall_station",
+                              "New Delhi (Safdarjung)")],
+            year        = int(st.session_state.get("rainfall_year", 2023)),
+            start_month = st.session_state.start_month_idx + 1,
+            end_month   = st.session_state.end_month_idx + 1,
+            heavy_rain_threshold = float(st.session_state.get(
+                                       "rainfall_heavy_threshold", 50.0)),
+            roof_area_m2 = float(st.session_state.get(
+                                       "rainfall_roof_area", 200.0)),
         )
 
     elif selected_parameter == "Ventilation":
