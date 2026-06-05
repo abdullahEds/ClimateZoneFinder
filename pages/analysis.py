@@ -450,6 +450,46 @@ with col_left:
             width=300,
         )
 
+        st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>',
+                    unsafe_allow_html=True)
+        try:
+            from modules import rainfall_ppt as _rain_ppt
+            _rain_station = st.session_state.get("rainfall_station", "New Delhi (Safdarjung)")
+            _rain_sid     = rainfall_module.STATIONS[_rain_station]
+            _rain_year    = int(st.session_state.get("rainfall_year", 2023))
+            _rain_s       = st.session_state.get("start_month_idx", 0) + 1
+            _rain_e       = st.session_state.get("end_month_idx", 11) + 1
+            _rain_thresh  = float(st.session_state.get("rainfall_heavy_threshold", 50.0))
+            _rain_areas   = {
+                "roof":  float(st.session_state.get(
+                    "runoff_area_roof",
+                    st.session_state.get("rainfall_roof_area", 200.0))),
+                "paved": float(st.session_state.get("runoff_area_paved", 0.0)),
+                "green": float(st.session_state.get("runoff_area_green", 0.0)),
+                "water": float(st.session_state.get("runoff_area_water", 0.0)),
+            }
+            _rain_bytes = _rain_ppt.generate_rainfall_pptx_report(
+                station_name         = _rain_station,
+                station_id           = _rain_sid,
+                year                 = _rain_year,
+                start_month          = _rain_s,
+                end_month            = _rain_e,
+                heavy_rain_threshold = _rain_thresh,
+                surface_areas        = _rain_areas,
+                gi_percentile        = int(st.session_state.get("balance_percentile", 95)),
+                gi_start_year        = int(st.session_state.get("balance_start_year", 1990)),
+            )
+            st.download_button(
+                label="⬇️ Download Rainfall Report",
+                data=_rain_bytes,
+                file_name=f"Rainfall_Analysis_{_rain_station}_{_rain_year}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                key="download_rainfall_report",
+                width=300,
+            )
+        except Exception as _re:
+            st.error(f"❌ Failed to generate rainfall report: {_re}")
+
     elif selected_parameter == "Ventilation":
         hour_range = (0, 23)
 

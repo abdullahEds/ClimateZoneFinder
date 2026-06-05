@@ -872,7 +872,7 @@ def render(
         return
 
     tab1, tab2, tab3, tab4 = st.tabs([
-        "Monthly Rainfall", "Rainy Days", "Runoff","Storage Potential",
+        "Monthly Rainfall", "Rainy Days", "Storage Potential","Runoff"
     ])
 
     with tab1:
@@ -882,7 +882,7 @@ def render(
         _render_rainy_days(df, year, heavy_rain_threshold)
 
     with tab3:
-        _render_roof_runoff(df, year, roof_area_m2)
+         _render_gi_balance_tab(station_id, year)
 
     # with tab4:
     #     _render_summary(df, heavy_rain_threshold)
@@ -891,4 +891,5 @@ def render(
     #     _render_leed_tab(station_id)
 
     with tab4:
-        _render_gi_balance_tab(station_id, year)
+        _render_roof_runoff(df, year, roof_area_m2)
+       
