@@ -297,23 +297,28 @@ with col_left:
         width=300,
     )
 
-if uploaded is None:
+if uploaded is None and selected_parameter != "Rainfall":
     with col_left:
         st.info("Please upload an .epw file to analyze.", width=300)
     st.stop()
 
 # ─── Read raw bytes once (used as cache key) ─────────────────────────────────
 
-raw_epw = uploaded.getvalue().decode("utf-8", errors="replace")
+if uploaded is not None:
+    raw_epw = uploaded.getvalue().decode("utf-8", errors="replace")
 
-# ─── Parse EPW using cache ────────────────────────────────────────────────────
+    # ─── Parse EPW using cache ────────────────────────────────────────────────
 
-try:
-    df, metadata = cached_df_with_derived(raw_epw)
-except Exception as e:
-    with col_left:
-        st.error(f"❌ Failed to parse EPW: {e}")
-    st.stop()
+    try:
+        df, metadata = cached_df_with_derived(raw_epw)
+    except Exception as e:
+        with col_left:
+            st.error(f"❌ Failed to parse EPW: {e}")
+        st.stop()
+else:
+    raw_epw  = None
+    df       = None
+    metadata = {}
 
 # ─── Left-panel controls ──────────────────────────────────────────────────────
 
@@ -533,52 +538,49 @@ with col_left:
         st.session_state.end_month_idx = end_month
 
     # ── PowerPoint report download ─────────────────────────────────────────────
-    st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
+    if uploaded is not None:
+        st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
 
-    try:
-        _year   = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
-        _s_num  = st.session_state.start_month_idx + 1
-        _e_num  = st.session_state.end_month_idx + 1
-        _start_date = pd.to_datetime(f"{_year}-{_s_num}-01").date()
-        _end_date   = (
-            pd.to_datetime(f"{_year}-12-31").date()
-            if _e_num == 12
-            else (pd.to_datetime(f"{_year}-{_e_num+1}-01") - pd.Timedelta(days=1)).date()
-        )
-        _sh, _eh = st.session_state.get("hour_range", (8, 18))
-        
-        # For combined report: use full year and full day by default
-        _full_year_start = pd.to_datetime(f"{_year}-01-01").date()
-        _full_year_end = pd.to_datetime(f"{_year}-12-31").date()
-        _full_day_start_hour = 0
-        _full_day_end_hour = 23
+        try:
+            _year   = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
+            _s_num  = st.session_state.start_month_idx + 1
+            _e_num  = st.session_state.end_month_idx + 1
+            _start_date = pd.to_datetime(f"{_year}-{_s_num}-01").date()
+            _end_date   = (
+                pd.to_datetime(f"{_year}-12-31").date()
+                if _e_num == 12
+                else (pd.to_datetime(f"{_year}-{_e_num+1}-01") - pd.Timedelta(days=1)).date()
+            )
+            _sh, _eh = st.session_state.get("hour_range", (8, 18))
 
-        # Generate combined report with Climate + Shading + Assumptions
-        # Use full year (Jan 1 - Dec 31) and full day (0-23 hours) by default
-        # Always include thermal comfort analysis
-        report_bytes = generate_combined_pptx_report(
-            df, _full_year_start, _full_year_end, _full_day_start_hour, _full_day_end_hour,
-            selected_parameter, metadata=metadata,
-            temp_threshold=float(st.session_state.get("temp_threshold", 28.0)),
-            rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
-            design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
-            n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
-            include_thermal_comfort=True,
-        )
-        
-        st.download_button(
-            label="⬇️ Download Combined Climate & Shading Report",
-            data=report_bytes,
-            file_name=(
-                f"Climate_Shading_Analysis_Report_"
-                f"{_full_year_start.strftime('%Y%m%d')}_to_{_full_year_end.strftime('%Y%m%d')}.pptx"
-            ),
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            key="download_combined_report",
-            width=300,
-        )
-    except Exception as _e:
-        st.error(f"❌ Failed to generate report: {_e}")
+            _full_year_start     = pd.to_datetime(f"{_year}-01-01").date()
+            _full_year_end       = pd.to_datetime(f"{_year}-12-31").date()
+            _full_day_start_hour = 0
+            _full_day_end_hour   = 23
+
+            report_bytes = generate_combined_pptx_report(
+                df, _full_year_start, _full_year_end, _full_day_start_hour, _full_day_end_hour,
+                selected_parameter, metadata=metadata,
+                temp_threshold=float(st.session_state.get("temp_threshold", 28.0)),
+                rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
+                design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
+                n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
+                include_thermal_comfort=True,
+            )
+
+            st.download_button(
+                label="⬇️ Download Combined Climate & Shading Report",
+                data=report_bytes,
+                file_name=(
+                    f"Climate_Shading_Analysis_Report_"
+                    f"{_full_year_start.strftime('%Y%m%d')}_to_{_full_year_end.strftime('%Y%m%d')}.pptx"
+                ),
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                key="download_combined_report",
+                width=300,
+            )
+        except Exception as _e:
+            st.error(f"❌ Failed to generate report: {_e}")
 
 # ─── Right panel ──────────────────────────────────────────────────────────────
 

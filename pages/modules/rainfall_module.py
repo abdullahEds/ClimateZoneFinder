@@ -5,7 +5,6 @@ import json
 import urllib.request
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import streamlit as st
 
 STATIONS = {
@@ -29,6 +28,13 @@ SURFACE_TYPES = {
     "Total green area (Trees, Shrubs, Groundcover)":               0.10,
     "Waterbody":                                                   0.90,
 }
+
+_RUNOFF_SURFACES = [
+    {"label": "Roof Area (Terrace + Service)",                               "key": "roof",  "rc": 0.90, "color": "#1d4ed8"},
+    {"label": "Total paved area on site (Roads, Paved pathways, Hardscape)", "key": "paved", "rc": 0.90, "color": "#6b7280"},
+    {"label": "Total green area on site (Trees, Shrubs, Groundcover)",       "key": "green", "rc": 0.10, "color": "#22c55e"},
+    {"label": "Waterbody",                                                    "key": "water", "rc": 0.90, "color": "#0891b2"},
+]
 
 TYPOLOGIES = [
     "Office", "Commercial", "Healthcare", "Mixed Use",
@@ -243,11 +249,11 @@ def _render_monthly_rainfall(df: pd.DataFrame, year: int) -> None:
     driest_idx   = int(monthly.idxmin())
     monsoon_total = monthly[[6, 7, 8, 9]].sum()
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c5 = st.columns(3)
     with c1: st.markdown(_card("Annual Total", f"{annual_total:.1f} mm", "Full year", "#1d4ed8"), unsafe_allow_html=True)
     with c2: st.markdown(_card("Wettest Month", f"{monthly[wettest_idx]:.1f} mm", _MONTH_LABELS[wettest_idx - 1], "#1e3a5f"), unsafe_allow_html=True)
-    with c3: st.markdown(_card("Driest Month", f"{monthly[driest_idx]:.1f} mm", _MONTH_LABELS[driest_idx - 1], "#93c5fd"), unsafe_allow_html=True)
-    with c4: st.markdown(_card("Monsoon Jun–Sep", f"{monsoon_total:.1f} mm", "Jun, Jul, Aug, Sep", "#3b82f6"), unsafe_allow_html=True)
+    # with c3: st.markdown(_card("Driest Month", f"{monthly[driest_idx]:.1f} mm", _MONTH_LABELS[driest_idx - 1], "#93c5fd"), unsafe_allow_html=True)
+    # with c4: st.markdown(_card("Monsoon Jun–Sep", f"{monsoon_total:.1f} mm", "Jun, Jul, Aug, Sep", "#3b82f6"), unsafe_allow_html=True)
     with c5: st.markdown(_card("Mean Monthly", f"{annual_mean:.1f} mm", "Annual ÷ 12", "#0891b2"), unsafe_allow_html=True)
 
 
@@ -321,363 +327,529 @@ def _render_rainy_days(df: pd.DataFrame, year: int,
         if dry_best_start and dry_best_end else "N/A"
     )
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2 = st.columns(2)
     with c1: st.markdown(_card("Total Rainy Days", str(total_rainy), "Days with prcp > 0", "#3b82f6"), unsafe_allow_html=True)
     with c2: st.markdown(_card("Extreme Rain Days", str(extreme_count), f"≥ {heavy_rain_threshold:.0f} mm/day", "#ef4444"), unsafe_allow_html=True)
-    with c3: st.markdown(_card("Max Consec. Dry", str(max_dry), "days", "#f59e0b"), unsafe_allow_html=True)
-    with c4: st.markdown(_card("Max Consec. Wet", str(max_wet), "days", "#0891b2"), unsafe_allow_html=True)
-    with c5: st.markdown(_card("Longest Dry Spell", longest_dry_str, f"{max_dry} days", "#8b5cf6"), unsafe_allow_html=True)
-
-
-def _render_roof_runoff(df: pd.DataFrame, year: int,
-                         roof_area_m2: float) -> None:
-    monthly_prcp = df.groupby("month")["prcp_mm"].sum().reindex(range(1, 13), fill_value=0)
-    runoff_m3    = (monthly_prcp / 1000) * roof_area_m2 * 0.85
-    cum_runoff   = runoff_m3.cumsum()
-
-    colors = [_intensity_color(v) for v in monthly_prcp.values]
-    tank_ref = roof_area_m2 * 0.05
-
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        subplot_titles=("Monthly Runoff Volume", "Cumulative Runoff"),
-        vertical_spacing=0.12,
-    )
-    fig.add_trace(go.Bar(
-        x=_MONTH_LABELS, y=runoff_m3.values,
-        marker_color=colors, name="Monthly Runoff",
-        hovertemplate="<b>%{x}</b><br>%{y:.2f} m³<extra></extra>",
-    ), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        x=_MONTH_LABELS, y=cum_runoff.values,
-        mode="lines+markers", line=dict(color="#0891b2", width=2),
-        name="Cumulative Runoff",
-        hovertemplate="<b>%{x}</b><br>%{y:.2f} m³<extra></extra>",
-    ), row=2, col=1)
-    fig.add_hline(
-        y=tank_ref, line_dash="dash", line_color="#f59e0b",
-        annotation_text=f"Tank capacity reference ({tank_ref:.1f} m³)",
-        annotation_position="top right",
-        row=2, col=1,
-    )
-    fig.update_yaxes(title_text="Runoff Volume (m³)", row=1, col=1)
-    fig.update_yaxes(title_text="Cumulative m³",      row=2, col=1)
-    fig.update_layout(
-        title=f"Estimated Roof Runoff – {year} (Roof area: {roof_area_m2} m²)",
-        height=550, template="plotly_white",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="right", x=1),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    annual_runoff = float(runoff_m3.sum())
-    peak_month    = int(runoff_m3.idxmax())
-    avg_monthly   = annual_runoff / 12
-    eff_rainfall  = monthly_prcp.sum() * 0.85
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(_card("Annual Runoff", f"{annual_runoff:.2f} m³", "Full year", "#1d4ed8"), unsafe_allow_html=True)
-    with c2: st.markdown(_card("Peak Month Runoff", f"{runoff_m3[peak_month]:.2f} m³", _MONTH_LABELS[peak_month - 1], "#ef4444"), unsafe_allow_html=True)
-    with c3: st.markdown(_card("Avg Monthly Runoff", f"{avg_monthly:.2f} m³", "Annual ÷ 12", "#3b82f6"), unsafe_allow_html=True)
-    with c4: st.markdown(_card("Effective Rainfall", f"{eff_rainfall:.1f} mm", "Annual prcp × 0.85", "#0891b2"), unsafe_allow_html=True)
-
-
-def _render_summary(df: pd.DataFrame, heavy_rain_threshold: float) -> None:
-    monthly_prcp  = df.groupby("month")["prcp_mm"].sum().reindex(range(1, 13), fill_value=0)
-    rainy_days    = df[df["prcp_mm"] > 0].groupby("month").size().reindex(range(1, 13), fill_value=0)
-    heavy_days    = df[df["prcp_mm"] >= heavy_rain_threshold].groupby("month").size().reindex(range(1, 13), fill_value=0)
-    runoff_m3     = (monthly_prcp / 1000) * 200.0 * 0.85  # default 200 m² for summary
-
-    def _classify(mm):
-        if mm < 25:   return "Arid"
-        elif mm < 75:  return "Dry"
-        elif mm < 150: return "Moderate"
-        elif mm < 300: return "Wet"
-        else:          return "Very Wet"
-
-    summary = pd.DataFrame({
-        "Month":            _MONTH_LABELS,
-        "Total (mm)":       monthly_prcp.values,
-        "Rainy Days":       rainy_days.values,
-        f"Heavy Days (≥{heavy_rain_threshold:.0f}mm)": heavy_days.values,
-        "Runoff (m³)":      runoff_m3.values,
-        "Classification":   [_classify(v) for v in monthly_prcp.values],
-    })
-
-    st.dataframe(
-        summary,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Total (mm)":  st.column_config.NumberColumn(format="%.1f"),
-            "Runoff (m³)": st.column_config.NumberColumn(format="%.1f"),
-        },
-    )
-
-    peak_month_idx = int(monthly_prcp.idxmax())
-    peak_mm        = float(monthly_prcp[peak_month_idx])
-    peak_name      = _MONTH_LABELS[peak_month_idx - 1]
-    st.info(f"Peak rainfall month: {peak_name} ({peak_mm:.1f} mm)")
+    # with c3: st.markdown(_card("Max Consec. Dry", str(max_dry), "days", "#f59e0b"), unsafe_allow_html=True)
+    # with c4: st.markdown(_card("Max Consec. Wet", str(max_wet), "days", "#0891b2"), unsafe_allow_html=True)
+    # with c5: st.markdown(_card("Longest Dry Spell", longest_dry_str, f"{max_dry} days", "#8b5cf6"), unsafe_allow_html=True)
 
 
 @st.fragment
-def _render_leed_tab(station_id: str) -> None:
-    c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
-    with c1:
-        st.selectbox(
-            "Rainfall Percentile",
-            options=PERCENTILE_OPTIONS,
-            index=2,
-            key="leed_percentile",
-            format_func=lambda x: f"{x}th percentile",
-        )
-    with c2:
-        st.number_input(
-            "Historical data from year",
-            value=1990, min_value=1950, max_value=2020,
-            step=1, key="leed_start_year",
-        )
-    with c3:
-        st.selectbox(
-            "Typology",
-            options=TYPOLOGIES,
-            index=1,
-            key="leed_typology",
-        )
-    with c4:
-        st.radio(
-            "Units",
-            options=["SI (m², m³)", "Imperial (ft², ft³)"],
-            key="leed_units",
-            horizontal=True,
-        )
-
-    result = _fetch_percentile_depth(
-        station_id,
-        st.session_state.get("leed_percentile", 95),
-        st.session_state.get("leed_start_year", 1990),
-    )
-
-    if "error" in result:
-        st.error(f"Could not fetch percentile depth: {result['error']}")
-        return
-
-    depth_m = result["rainfallDepth_m"]
-    st.info(
-        f"Design storm depth ({result['percentile']}th percentile, "
-        f"{result['start_date']} – {result['end_date']}, "
-        f"n={result['sample_size']} rain-days): "
-        f"**{result['raw_mm']:.2f} mm** ({depth_m:.4f} m)"
-    )
-
-    st.markdown("#### Surface Details")
-    default_surfaces = pd.DataFrame({
-        "Surface Type": list(SURFACE_TYPES.keys())[:1],
-        "Area":         [0.0],
-        "RC":           [list(SURFACE_TYPES.values())[0]],
-    })
-    surfaces_df = st.data_editor(
-        st.session_state.get("leed_surfaces_df", default_surfaces),
-        key="leed_surfaces_editor",
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Surface Type": st.column_config.SelectboxColumn(
-                "Surface Type",
-                options=list(SURFACE_TYPES.keys()),
-                required=True,
-            ),
-            "Area": st.column_config.NumberColumn(
-                "Area (m²)", min_value=0.0, format="%.2f"
-            ),
-            "RC": st.column_config.NumberColumn(
-                "Runoff Coefficient", min_value=0.0, max_value=1.0, format="%.2f"
-            ),
-        },
-        hide_index=True,
-    )
-    st.session_state["leed_surfaces_df"] = surfaces_df
-    st.caption("RC defaults — Roof/Paved: 0.90 · Green: 0.10 · Waterbody: 0.90")
-
-    st.markdown("#### Recharge Strategies (Green Infrastructure)")
-    default_gi = pd.DataFrame({
-        "GI Type":   [""],
-        "Shape":     ["Cuboid"],
-        "Length m":  [0.0],
-        "Breadth m": [0.0],
-        "Radius m":  [0.0],
-        "Depth m":   [0.0],
-        "Count":     [1],
-    })
-    gi_df = st.data_editor(
-        st.session_state.get("leed_gi_df", default_gi),
-        key="leed_gi_editor",
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "GI Type": st.column_config.TextColumn("GI Type", required=True),
-            "Shape": st.column_config.SelectboxColumn(
-                "Shape", options=["Cuboid", "Cylindrical"], required=True
-            ),
-            "Length m":  st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
-            "Breadth m": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
-            "Radius m":  st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
-            "Depth m":   st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
-            "Count":     st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
-        },
-        hide_index=True,
-    )
-    st.session_state["leed_gi_df"] = gi_df
-    st.caption(
-        "For Cuboid: use Length + Breadth + Depth. "
-        "For Cylindrical: use Radius + Depth. Leave unused fields as 0."
-    )
-
-    if st.button("Calculate LEED Compliance", type="primary", use_container_width=False):
-        surface_results = []
-        total_runoff = 0.0
-        for _, row in surfaces_df.iterrows():
-            area = float(row["Area"])
-            rc   = float(row["RC"])
-            vol  = _runoff_volume(area, rc, depth_m)
-            surface_results.append({
-                "type": row["Surface Type"],
-                "area": area, "rc": rc, "runoff": vol,
-            })
-            total_runoff += vol
-
-        gi_results = []
-        total_gi = 0.0
-        for _, row in gi_df.iterrows():
-            vol = _gi_volume(
-                shape=row["Shape"],
-                depth=float(row["Depth m"]),
-                count=int(row["Count"]),
-                length=float(row["Length m"]),
-                breadth=float(row["Breadth m"]),
-                radius=float(row["Radius m"]),
-            )
-            gi_results.append({"type": row["GI Type"], "shape": row["Shape"], "volume": vol})
-            total_gi += vol
-
-        typology   = st.session_state.get("leed_typology", "Commercial")
-        percentile = int(st.session_state.get("leed_percentile", 95))
-        points     = _compliance_points(total_gi, total_runoff, typology, percentile)
-        max_points = 2 if typology == "Healthcare" else 3
-
-        st.session_state["leed_results"] = {
-            "surface_results": surface_results,
-            "gi_results":      gi_results,
-            "total_runoff":    total_runoff,
-            "total_gi":        total_gi,
-            "points":          points,
-            "max_points":      max_points,
-            "typology":        typology,
-            "percentile":      percentile,
-            "depth_m":         depth_m,
-        }
-
-    if "leed_results" not in st.session_state:
-        return
-
-    res        = st.session_state["leed_results"]
-    total_runoff    = res["total_runoff"]
-    total_gi        = res["total_gi"]
-    points          = res["points"]
-    max_points      = res["max_points"]
-    percentile      = res["percentile"]
-    surface_results = res["surface_results"]
-    gi_results      = res["gi_results"]
-
-    is_noncompliant = points <= 0
-    at_max          = (not is_noncompliant) and points >= max_points
-    can_enhance     = (not is_noncompliant) and (not at_max)
-
-    if is_noncompliant:
-        card_color = "#b71c1c"
-        card_text  = (
-            f"Non-compliant — Recharge/Storage ({total_gi:.2f} m³) "
-            f"fails to meet site runoff ({total_runoff:.2f} m³) "
-            f"during {percentile}th percentile event."
-        )
-    elif at_max:
-        card_color = "#2e7d32"
-        card_text  = (
-            f"Compliant — {points} point/s achievable. "
-            f"Recharge ({total_gi:.2f} m³) ≥ Runoff ({total_runoff:.2f} m³)."
-        )
-    else:
-        card_color = "#1b5e20"
-        card_text  = (
-            f"Compliant (Enhance) — {points} point/s now. "
-            f"Increasing percentile or adding GI may yield up to {max_points} point/s."
-        )
-
-    st.markdown(
-        f'<div style="background:white;padding:16px;border-radius:8px;'
-        f'border-left:4px solid {card_color};box-shadow:0 2px 4px rgba(0,0,0,0.08);'
-        f'text-align:center;">'
-        f'<div style="font-size:11px;font-weight:700;color:{card_color};'
-        f'text-transform:uppercase;letter-spacing:0.5px;">LEED Compliance Status</div>'
-        f'<div style="font-size:18px;font-weight:700;color:#2c3e50;margin:8px 0;">{card_text}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("<br>", unsafe_allow_html=True)
-
+def _render_roof_runoff(df: pd.DataFrame, year: int,
+                         roof_area_m2: float) -> None:
+    # ── Area inputs per surface type ──────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(_card("Total Runoff",        f"{total_runoff:.2f} m³", "Site runoff volume",    "#ef4444"), unsafe_allow_html=True)
-    with c2: st.markdown(_card("Total Recharge",      f"{total_gi:.2f} m³",    "GI storage volume",     "#2e7d32"), unsafe_allow_html=True)
-    with c3: st.markdown(_card("LEED Points Earned",  str(points),              "Points achieved",       "#3b82f6"), unsafe_allow_html=True)
-    with c4: st.markdown(_card("Max Available Points", str(max_points),         f"For {res['typology']}", "#f59e0b"), unsafe_allow_html=True)
+    cols = [c1, c2, c3, c4]
+    areas = {}
+    for i, surf in enumerate(_RUNOFF_SURFACES):
+        with cols[i]:
+            areas[surf["key"]] = st.number_input(
+                surf["label"],
+                value=(roof_area_m2 if i == 0 else 0.0),
+                min_value=0.0,
+                step=10.0,
+                key=f"runoff_area_{surf['key']}",
+            )
 
+    monthly_prcp = df.groupby("month")["prcp_mm"].sum().reindex(range(1, 13), fill_value=0)
+
+    # ── Stacked runoff chart ───────────────────────────────────────────────────
     fig = go.Figure()
-    for s in surface_results:
+    monthly_per_surf = {}
+    for surf in _RUNOFF_SURFACES:
+        monthly_vol = (monthly_prcp / 1000.0) * areas[surf["key"]] * surf["rc"]
+        monthly_per_surf[surf["key"]] = monthly_vol
         fig.add_trace(go.Bar(
-            name=s["type"],
-            x=["Site Runoff", "Recharge/Storage"],
-            y=[s["runoff"], 0],
+            x=_MONTH_LABELS,
+            y=monthly_vol.values,
+            name=surf["label"],
+            marker_color=surf["color"],
+            hovertemplate=f"<b>%{{x}}</b><br>{surf['label']}: %{{y:.3f}} m³<extra></extra>",
         ))
-    for g in gi_results:
-        fig.add_trace(go.Bar(
-            name=g["type"],
-            x=["Site Runoff", "Recharge/Storage"],
-            y=[0, g["volume"]],
-        ))
+
     fig.update_layout(
         barmode="stack",
-        title=f"Runoff vs Recharge — {percentile}th Percentile Event",
-        yaxis_title="Volume (m³)",
-        height=400, template="plotly_white",
-        legend=dict(orientation="h", y=-0.25),
+        title=f"Monthly Surface Runoff by Type – {year}",
+        xaxis_title="Month",
+        yaxis_title="Runoff Volume (m³)",
+        height=450,
+        template="plotly_white",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1),
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    left_col, right_col = st.columns(2)
-    with left_col:
-        st.markdown("**Surface Runoff Breakdown**")
-        surf_table = pd.DataFrame([
-            {
-                "Surface Type": s["type"],
-                "Area (m²)":    round(s["area"],   3),
-                "RC":           round(s["rc"],     3),
-                "Runoff (m³)":  round(s["runoff"], 3),
-            }
-            for s in surface_results
-        ])
-        st.dataframe(surf_table, use_container_width=True, hide_index=True)
+    # ── KPI cards ─────────────────────────────────────────────────────────────
+    surf_df = pd.DataFrame(
+        {surf["key"]: monthly_per_surf[surf["key"]] for surf in _RUNOFF_SURFACES}
+    )
+    total_monthly = surf_df.sum(axis=1)
+    total_annual  = float(total_monthly.sum())
+    peak_month    = int(total_monthly.idxmax()) if total_annual > 0 else 1
 
-    with right_col:
-        st.markdown("**GI Storage Breakdown**")
-        gi_table = pd.DataFrame([
-            {
-                "GI Type":     g["type"],
-                "Shape":       g["shape"],
-                "Volume (m³)": round(g["volume"], 3),
-            }
-            for g in gi_results
-        ])
-        st.dataframe(gi_table, use_container_width=True, hide_index=True)
+    ca, cb = st.columns(2)
+    with ca:
+        st.markdown(
+            _card("Total Annual Runoff", f"{int(round(total_annual * 1000))} L", "All surfaces combined", "#1d4ed8"),
+            unsafe_allow_html=True,
+        )
+    with cb:
+        st.markdown(
+            _card("Peak Runoff Month", f"{int(round(float(total_monthly[peak_month]) * 1000))} L",
+                  _MONTH_LABELS[peak_month - 1], "#ef4444"),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    short_labels = ["Roof", "Paved", "Green Area", "Waterbody"]
+    cs1, cs2, cs3, cs4 = st.columns(4)
+    for i, (surf, col) in enumerate(zip(_RUNOFF_SURFACES, [cs1, cs2, cs3, cs4])):
+        with col:
+            annual_vol = float(surf_df[surf["key"]].sum())
+            st.markdown(
+                _card(short_labels[i], f"{int(round(annual_vol * 1000))} L", f"RC = {surf['rc']:.2f}", surf["color"]),
+                unsafe_allow_html=True,
+            )
+
+
+# def _render_summary(df: pd.DataFrame, heavy_rain_threshold: float) -> None:
+#     monthly_prcp  = df.groupby("month")["prcp_mm"].sum().reindex(range(1, 13), fill_value=0)
+#     rainy_days    = df[df["prcp_mm"] > 0].groupby("month").size().reindex(range(1, 13), fill_value=0)
+#     heavy_days    = df[df["prcp_mm"] >= heavy_rain_threshold].groupby("month").size().reindex(range(1, 13), fill_value=0)
+#     runoff_m3     = (monthly_prcp / 1000) * 200.0 * 0.85  # default 200 m² for summary
+
+#     def _classify(mm):
+#         if mm < 25:   return "Arid"
+#         elif mm < 75:  return "Dry"
+#         elif mm < 150: return "Moderate"
+#         elif mm < 300: return "Wet"
+#         else:          return "Very Wet"
+
+#     summary = pd.DataFrame({
+#         "Month":            _MONTH_LABELS,
+#         "Total (mm)":       monthly_prcp.values,
+#         "Rainy Days":       rainy_days.values,
+#         f"Heavy Days (≥{heavy_rain_threshold:.0f}mm)": heavy_days.values,
+#         "Runoff (m³)":      runoff_m3.values,
+#         "Classification":   [_classify(v) for v in monthly_prcp.values],
+#     })
+
+#     st.dataframe(
+#         summary,
+#         use_container_width=True,
+#         hide_index=True,
+#         column_config={
+#             "Total (mm)":  st.column_config.NumberColumn(format="%.1f"),
+#             "Runoff (m³)": st.column_config.NumberColumn(format="%.1f"),
+#         },
+#     )
+
+#     peak_month_idx = int(monthly_prcp.idxmax())
+#     peak_mm        = float(monthly_prcp[peak_month_idx])
+#     peak_name      = _MONTH_LABELS[peak_month_idx - 1]
+#     st.info(f"Peak rainfall month: {peak_name} ({peak_mm:.1f} mm)")
+
+
+# @st.fragment
+# def _render_leed_tab(station_id: str) -> None:
+#     c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+#     with c1:
+#         st.selectbox(
+#             "Rainfall Percentile",
+#             options=PERCENTILE_OPTIONS,
+#             index=2,
+#             key="leed_percentile",
+#             format_func=lambda x: f"{x}th percentile",
+#         )
+#     with c2:
+#         st.number_input(
+#             "Historical data from year",
+#             value=1990, min_value=1950, max_value=2020,
+#             step=1, key="leed_start_year",
+#         )
+#     with c3:
+#         st.selectbox(
+#             "Typology",
+#             options=TYPOLOGIES,
+#             index=1,
+#             key="leed_typology",
+#         )
+#     with c4:
+#         st.radio(
+#             "Units",
+#             options=["SI (m², m³)", "Imperial (ft², ft³)"],
+#             key="leed_units",
+#             horizontal=True,
+#         )
+
+#     result = _fetch_percentile_depth(
+#         station_id,
+#         st.session_state.get("leed_percentile", 95),
+#         st.session_state.get("leed_start_year", 1990),
+#     )
+
+#     if "error" in result:
+#         st.error(f"Could not fetch percentile depth: {result['error']}")
+#         return
+
+#     depth_m = result["rainfallDepth_m"]
+#     st.info(
+#         f"Design storm depth ({result['percentile']}th percentile, "
+#         f"{result['start_date']} – {result['end_date']}, "
+#         f"n={result['sample_size']} rain-days): "
+#         f"**{result['raw_mm']:.2f} mm** ({depth_m:.4f} m)"
+#     )
+
+#     st.markdown("#### Surface Details")
+#     default_surfaces = pd.DataFrame({
+#         "Surface Type": list(SURFACE_TYPES.keys())[:1],
+#         "Area":         [0.0],
+#         "RC":           [list(SURFACE_TYPES.values())[0]],
+#     })
+#     surfaces_df = st.data_editor(
+#         st.session_state.get("leed_surfaces_df", default_surfaces),
+#         key="leed_surfaces_editor",
+#         num_rows="dynamic",
+#         use_container_width=True,
+#         column_config={
+#             "Surface Type": st.column_config.SelectboxColumn(
+#                 "Surface Type",
+#                 options=list(SURFACE_TYPES.keys()),
+#                 required=True,
+#             ),
+#             "Area": st.column_config.NumberColumn(
+#                 "Area (m²)", min_value=0.0, format="%.2f"
+#             ),
+#             "RC": st.column_config.NumberColumn(
+#                 "Runoff Coefficient", min_value=0.0, max_value=1.0, format="%.2f"
+#             ),
+#         },
+#         hide_index=True,
+#     )
+#     st.session_state["leed_surfaces_df"] = surfaces_df
+#     st.caption("RC defaults — Roof/Paved: 0.90 · Green: 0.10 · Waterbody: 0.90")
+
+#     st.markdown("#### Recharge Strategies (Green Infrastructure)")
+#     default_gi = pd.DataFrame({
+#         "GI Type":   [""],
+#         "Shape":     ["Cuboid"],
+#         "Length m":  [0.0],
+#         "Breadth m": [0.0],
+#         "Radius m":  [0.0],
+#         "Depth m":   [0.0],
+#         "Count":     [1],
+#     })
+#     gi_df = st.data_editor(
+#         st.session_state.get("leed_gi_df", default_gi),
+#         key="leed_gi_editor",
+#         num_rows="dynamic",
+#         use_container_width=True,
+#         column_config={
+#             "GI Type": st.column_config.TextColumn("GI Type", required=True),
+#             "Shape": st.column_config.SelectboxColumn(
+#                 "Shape", options=["Cuboid", "Cylindrical"], required=True
+#             ),
+#             "Length m":  st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
+#             "Breadth m": st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
+#             "Radius m":  st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
+#             "Depth m":   st.column_config.NumberColumn(min_value=0.0, format="%.2f"),
+#             "Count":     st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+#         },
+#         hide_index=True,
+#     )
+#     st.session_state["leed_gi_df"] = gi_df
+#     st.caption(
+#         "For Cuboid: use Length + Breadth + Depth. "
+#         "For Cylindrical: use Radius + Depth. Leave unused fields as 0."
+#     )
+
+#     if st.button("Calculate LEED Compliance", type="primary", use_container_width=False):
+#         surface_results = []
+#         total_runoff = 0.0
+#         for _, row in surfaces_df.iterrows():
+#             area = float(row["Area"])
+#             rc   = float(row["RC"])
+#             vol  = _runoff_volume(area, rc, depth_m)
+#             surface_results.append({
+#                 "type": row["Surface Type"],
+#                 "area": area, "rc": rc, "runoff": vol,
+#             })
+#             total_runoff += vol
+
+#         gi_results = []
+#         total_gi = 0.0
+#         for _, row in gi_df.iterrows():
+#             vol = _gi_volume(
+#                 shape=row["Shape"],
+#                 depth=float(row["Depth m"]),
+#                 count=int(row["Count"]),
+#                 length=float(row["Length m"]),
+#                 breadth=float(row["Breadth m"]),
+#                 radius=float(row["Radius m"]),
+#             )
+#             gi_results.append({"type": row["GI Type"], "shape": row["Shape"], "volume": vol})
+#             total_gi += vol
+
+#         typology   = st.session_state.get("leed_typology", "Commercial")
+#         percentile = int(st.session_state.get("leed_percentile", 95))
+#         points     = _compliance_points(total_gi, total_runoff, typology, percentile)
+#         max_points = 2 if typology == "Healthcare" else 3
+
+#         st.session_state["leed_results"] = {
+#             "surface_results": surface_results,
+#             "gi_results":      gi_results,
+#             "total_runoff":    total_runoff,
+#             "total_gi":        total_gi,
+#             "points":          points,
+#             "max_points":      max_points,
+#             "typology":        typology,
+#             "percentile":      percentile,
+#             "depth_m":         depth_m,
+#         }
+
+#     if "leed_results" not in st.session_state:
+#         return
+
+#     res        = st.session_state["leed_results"]
+#     total_runoff    = res["total_runoff"]
+#     total_gi        = res["total_gi"]
+#     points          = res["points"]
+#     max_points      = res["max_points"]
+#     percentile      = res["percentile"]
+#     surface_results = res["surface_results"]
+#     gi_results      = res["gi_results"]
+
+#     is_noncompliant = points <= 0
+#     at_max          = (not is_noncompliant) and points >= max_points
+#     can_enhance     = (not is_noncompliant) and (not at_max)
+
+#     if is_noncompliant:
+#         card_color = "#b71c1c"
+#         card_text  = (
+#             f"Non-compliant — Recharge/Storage ({total_gi:.2f} m³) "
+#             f"fails to meet site runoff ({total_runoff:.2f} m³) "
+#             f"during {percentile}th percentile event."
+#         )
+#     elif at_max:
+#         card_color = "#2e7d32"
+#         card_text  = (
+#             f"Compliant — {points} point/s achievable. "
+#             f"Recharge ({total_gi:.2f} m³) ≥ Runoff ({total_runoff:.2f} m³)."
+#         )
+#     else:
+#         card_color = "#1b5e20"
+#         card_text  = (
+#             f"Compliant (Enhance) — {points} point/s now. "
+#             f"Increasing percentile or adding GI may yield up to {max_points} point/s."
+#         )
+
+#     st.markdown(
+#         f'<div style="background:white;padding:16px;border-radius:8px;'
+#         f'border-left:4px solid {card_color};box-shadow:0 2px 4px rgba(0,0,0,0.08);'
+#         f'text-align:center;">'
+#         f'<div style="font-size:11px;font-weight:700;color:{card_color};'
+#         f'text-transform:uppercase;letter-spacing:0.5px;">LEED Compliance Status</div>'
+#         f'<div style="font-size:18px;font-weight:700;color:#2c3e50;margin:8px 0;">{card_text}</div>'
+#         f'</div>',
+#         unsafe_allow_html=True,
+#     )
+#     st.markdown("<br>", unsafe_allow_html=True)
+
+#     c1, c2, c3, c4 = st.columns(4)
+#     with c1: st.markdown(_card("Total Runoff",        f"{total_runoff:.2f} m³", "Site runoff volume",    "#ef4444"), unsafe_allow_html=True)
+#     with c2: st.markdown(_card("Total Recharge",      f"{total_gi:.2f} m³",    "GI storage volume",     "#2e7d32"), unsafe_allow_html=True)
+#     with c3: st.markdown(_card("LEED Points Earned",  str(points),              "Points achieved",       "#3b82f6"), unsafe_allow_html=True)
+#     with c4: st.markdown(_card("Max Available Points", str(max_points),         f"For {res['typology']}", "#f59e0b"), unsafe_allow_html=True)
+
+#     fig = go.Figure()
+#     for s in surface_results:
+#         fig.add_trace(go.Bar(
+#             name=s["type"],
+#             x=["Site Runoff", "Recharge/Storage"],
+#             y=[s["runoff"], 0],
+#         ))
+#     for g in gi_results:
+#         fig.add_trace(go.Bar(
+#             name=g["type"],
+#             x=["Site Runoff", "Recharge/Storage"],
+#             y=[0, g["volume"]],
+#         ))
+#     fig.update_layout(
+#         barmode="stack",
+#         title=f"Runoff vs Recharge — {percentile}th Percentile Event",
+#         yaxis_title="Volume (m³)",
+#         height=400, template="plotly_white",
+#         legend=dict(orientation="h", y=-0.25),
+#     )
+#     st.plotly_chart(fig, use_container_width=True)
+
+#     left_col, right_col = st.columns(2)
+#     with left_col:
+#         st.markdown("**Surface Runoff Breakdown**")
+#         surf_table = pd.DataFrame([
+#             {
+#                 "Surface Type": s["type"],
+#                 "Area (m²)":    round(s["area"],   3),
+#                 "RC":           round(s["rc"],     3),
+#                 "Runoff (m³)":  round(s["runoff"], 3),
+#             }
+#             for s in surface_results
+#         ])
+#         st.dataframe(surf_table, use_container_width=True, hide_index=True)
+
+#     with right_col:
+#         st.markdown("**GI Storage Breakdown**")
+#         gi_table = pd.DataFrame([
+#             {
+#                 "GI Type":     g["type"],
+#                 "Shape":       g["shape"],
+#                 "Volume (m³)": round(g["volume"], 3),
+#             }
+#             for g in gi_results
+#         ])
+#         st.dataframe(gi_table, use_container_width=True, hide_index=True)
+
+
+# ── GI Balance tab ───────────────────────────────────────────────────────────
+
+@st.fragment
+def _render_gi_balance_tab(station_id: str, year: int) -> None:
+    c1, c2, _ = st.columns([1, 1, 2])
+    with c1:
+        percentile = st.selectbox(
+            "Baseline Percentile",
+            options=PERCENTILE_OPTIONS,
+            index=2,
+            key="balance_percentile",
+            format_func=lambda x: f"{x}th percentile",
+        )
+    with c2:
+        start_year = st.number_input(
+            "Historical data from year",
+            value=1990, min_value=1950, max_value=2020,
+            step=1, key="balance_start_year",
+        )
+
+    result = _fetch_percentile_depth(station_id, percentile, start_year)
+    if "error" in result:
+        st.error(f"Could not fetch baseline depth: {result['error']}")
+        return
+
+    baseline_mm = result["raw_mm"]
+    st.info(
+        f"{result['percentile']}th-percentile daily depth "
+        f"({result['start_date']} – {result['end_date']}, "
+        f"n={result['sample_size']} rain-days): "
+        f"**{baseline_mm:.2f} mm = {baseline_mm:.2f} L/m²** — used as GI capacity baseline"
+    )
+
+    # Full-year data (cached, no extra cost)
+    full_df = _fetch_noaa(station_id, year)
+    if full_df.empty:
+        st.warning("No rainfall data available for this station/year.")
+        return
+
+    daily = full_df.sort_values("date").copy()
+    daily["stored"]   = daily["prcp_mm"].clip(upper=baseline_mm)
+    daily["overflow"] = (daily["prcp_mm"] - baseline_mm).clip(lower=0)
+
+    # Monthly aggregation
+    monthly_grp = daily.groupby("month").agg(
+        stored=("stored",   "sum"),
+        overflow=("overflow", "sum"),
+    ).reindex(range(1, 13), fill_value=0)
+
+    # Per-day overflow flag still needed for KPI cards
+    overflow_mask = daily["overflow"] > 0
+    overflow_days = daily[overflow_mask]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=_MONTH_LABELS,
+        y=monthly_grp["stored"].values,
+        name="Stored (L/m²)",
+        marker_color="#22c55e",
+        customdata=monthly_grp[["stored", "overflow"]].values,
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "Stored: %{customdata[0]:.1f} L/m²<br>"
+            "Overflow: %{customdata[1]:.1f} L/m²"
+            "<extra></extra>"
+        ),
+    ))
+    fig.add_trace(go.Bar(
+        x=_MONTH_LABELS,
+        y=-monthly_grp["overflow"].values,
+        name="Overflow (L/m²)",
+        marker_color="#ef4444",
+        customdata=monthly_grp[["stored", "overflow"]].values,
+        hovertemplate=(
+            "<b>%{x}</b><br>"
+            "Stored: %{customdata[0]:.1f} L/m²<br>"
+            "Overflow: %{customdata[1]:.1f} L/m²"
+            "<extra></extra>"
+        ),
+    ))
+    fig.add_hline(
+        y=0,
+        line_dash="dash", line_color="#374151", line_width=1.5,
+        annotation_text=f"Daily baseline: {baseline_mm:.2f} mm",
+        annotation_position="top right",
+    )
+    fig.update_layout(
+        barmode="relative",
+        title=(
+            f"Monthly Rainwater Harvesting Potential – {year} "
+            f"({percentile}th-percentile baseline: {baseline_mm:.2f} mm/day)"
+        ),
+        xaxis_title="Month",
+        yaxis_title="Volume (L/m²)",
+        height=450,
+        template="plotly_white",
+        hovermode="x unified",
+        bargap=0.25,
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="right", x=1),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Summary metrics ────────────────────────────────────────────────────────
+    total_recharge = daily["stored"].sum()
+
+    total_overflow = daily["overflow"].sum()
+
+    if not overflow_days.empty:
+        worst_month_idx = int(monthly_grp["overflow"].idxmax())
+        worst_month_str = (
+            f"{_MONTH_LABELS[worst_month_idx - 1]} "
+            f"({int(round(monthly_grp.loc[worst_month_idx, 'overflow']))} L/m²)"
+        )
+    else:
+        worst_month_str = "None"
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(
+            _card("Storage Potential", f"{int(round(total_recharge))} L/m²", "Total captured by GI", "#22c55e"),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            _card("Recharge Potential", f"{int(round(total_overflow))} L/m²", "Excess beyond GI capacity", "#ef4444"),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            _card("Overflow Days", str(len(overflow_days)),
+                  f"Days with rain > {baseline_mm:.1f} mm", "#f59e0b"),
+            unsafe_allow_html=True,
+        )
+    with c4:
+        st.markdown(
+            _card("Worst Overflow Month", worst_month_str, "Highest monthly excess", "#8b5cf6"),
+            unsafe_allow_html=True,
+        )
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -699,8 +871,8 @@ def render(
         st.warning("No data in the selected month range.")
         return
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Monthly Rainfall", "Rainy Days", "Roof Runoff", "Summary", "LEED Compliance"
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Monthly Rainfall", "Rainy Days", "Runoff","Storage Potential",
     ])
 
     with tab1:
@@ -712,8 +884,11 @@ def render(
     with tab3:
         _render_roof_runoff(df, year, roof_area_m2)
 
-    with tab4:
-        _render_summary(df, heavy_rain_threshold)
+    # with tab4:
+    #     _render_summary(df, heavy_rain_threshold)
 
-    with tab5:
-        _render_leed_tab(station_id)
+    # with tab5:
+    #     _render_leed_tab(station_id)
+
+    with tab4:
+        _render_gi_balance_tab(station_id, year)
