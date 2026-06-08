@@ -200,6 +200,15 @@ def _card(label: str, value: str, sub: str, color: str) -> str:
     )
 
 
+def _fmt_vol(litres: float, unit: str = "L") -> str:
+    """Abbreviate large litre values for readability (5,702,745 → 5.70M L)."""
+    if litres >= 1_000_000:
+        return f"{litres / 1_000_000:.2f}M {unit}"
+    if litres >= 10_000:
+        return f"{litres / 1_000:.1f}K {unit}"
+    return f"{litres:,.0f} {unit}"
+
+
 # ── Bar color by intensity ────────────────────────────────────────────────────
 
 def _intensity_color(mm: float) -> str:
@@ -391,12 +400,12 @@ def _render_roof_runoff(df: pd.DataFrame, year: int,
     ca, cb = st.columns(2)
     with ca:
         st.markdown(
-            _card("Total Annual Runoff", f"{int(round(total_annual * 1000))} L", "All surfaces combined", "#1d4ed8"),
+            _card("Total Annual Runoff", _fmt_vol(total_annual * 1000), "All surfaces combined", "#1d4ed8"),
             unsafe_allow_html=True,
         )
     with cb:
         st.markdown(
-            _card("Peak Runoff Month", f"{int(round(float(total_monthly[peak_month]) * 1000))} L",
+            _card("Peak Runoff Month", _fmt_vol(float(total_monthly[peak_month]) * 1000),
                   _MONTH_LABELS[peak_month - 1], "#ef4444"),
             unsafe_allow_html=True,
         )
@@ -409,7 +418,7 @@ def _render_roof_runoff(df: pd.DataFrame, year: int,
         with col:
             annual_vol = float(surf_df[surf["key"]].sum())
             st.markdown(
-                _card(short_labels[i], f"{int(round(annual_vol * 1000))} L", f"RC = {surf['rc']:.2f}", surf["color"]),
+                _card(short_labels[i], _fmt_vol(annual_vol * 1000), f"RC = {surf['rc']:.2f}", surf["color"]),
                 unsafe_allow_html=True,
             )
 
@@ -823,7 +832,7 @@ def _render_gi_balance_tab(station_id: str, year: int) -> None:
         worst_month_idx = int(monthly_grp["overflow"].idxmax())
         worst_month_str = (
             f"{_MONTH_LABELS[worst_month_idx - 1]} "
-            f"({int(round(monthly_grp.loc[worst_month_idx, 'overflow']))} L/m²)"
+            f"({monthly_grp.loc[worst_month_idx, 'overflow']:,.0f} L/m²)"
         )
     else:
         worst_month_str = "None"
@@ -831,12 +840,12 @@ def _render_gi_balance_tab(station_id: str, year: int) -> None:
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(
-            _card("Storage Potential", f"{int(round(total_recharge))} L/m²", "Total captured by GI", "#22c55e"),
+            _card("Storage Potential", f"{total_recharge:,.0f} L/m²", "Total captured by GI", "#22c55e"),
             unsafe_allow_html=True,
         )
     with c2:
         st.markdown(
-            _card("Recharge Potential", f"{int(round(total_overflow))} L/m²", "Excess beyond GI capacity", "#ef4444"),
+            _card("Recharge Potential", f"{total_overflow:,.0f} L/m²", "Excess beyond GI capacity", "#ef4444"),
             unsafe_allow_html=True,
         )
     with c3:

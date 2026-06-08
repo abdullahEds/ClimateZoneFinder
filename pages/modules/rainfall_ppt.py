@@ -129,6 +129,14 @@ def generate_rainfall_pptx_report(
     def _hex_rgb(h: str) -> RGBColor:
         return RGBColor(int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
 
+    def _fmt_L(litres: float, unit: str = "L") -> str:
+        """Abbreviate large litre values for slide readability."""
+        if litres >= 1_000_000:
+            return f"{litres / 1_000_000:.2f}M {unit}"
+        if litres >= 10_000:
+            return f"{litres / 1_000:.1f}K {unit}"
+        return f"{litres:,.0f} {unit}"
+
     def _kpi_card(slide, left, top, width, height,
                   label: str, value: str, sub: str, hex_color: str):
         """Colored KPI card with label / large value / sub-label."""
@@ -139,31 +147,31 @@ def generate_rainfall_pptx_report(
         rect.fill.fore_color.rgb = _hex_rgb(hex_color)
         rect.line.fill.background()
 
-        label_color = RGBColor(0xCC, 0xDD, 0xFF)   # soft blue-white
-        sub_color   = RGBColor(0xBB, 0xCC, 0xEE)
+        label_color = RGBColor(0xCC, 0xDD, 0xFF)   # muted blue-white for label
+        sub_color   = RGBColor(0xD4, 0xE8, 0xFF)   # brighter for readable sub
 
-        # Label  — small caps, top of card
+        # Label — sentence case, muted, top of card
         tb_l = slide.shapes.add_textbox(
-            Inches(left + 0.07), Inches(top + 0.07),
-            Inches(width - 0.14), Inches(0.22))
+            Inches(left + 0.07), Inches(top + 0.06),
+            Inches(width - 0.14), Inches(0.20))
         tf_l = tb_l.text_frame
         tf_l.word_wrap = True
         p_l = tf_l.paragraphs[0]
         p_l.alignment = PP_ALIGN.CENTER
         r_l = p_l.add_run()
-        r_l.text = label.upper()
-        r_l.font.size = Pt(8)
-        r_l.font.bold = True
+        r_l.text = label          # sentence case — no .upper()
+        r_l.font.size = Pt(9)
+        r_l.font.bold = False
         r_l.font.color.rgb = label_color
 
-        # Value — large, bold, centred vertically
-        val_font = Pt(22) if height >= 1.1 else Pt(17)
-        val_top  = top + (height - 0.25) / 2 - 0.08
+        # Value — dominant, bold, centred vertically
+        val_font = Pt(26) if height >= 0.80 else Pt(22)
+        val_top  = top + (height - 0.28) / 2 - 0.05
         tb_v = slide.shapes.add_textbox(
-            Inches(left + 0.07), Inches(val_top),
-            Inches(width - 0.14), Inches(0.55))
+            Inches(left + 0.05), Inches(val_top),
+            Inches(width - 0.10), Inches(0.50))
         tf_v = tb_v.text_frame
-        tf_v.word_wrap = True
+        tf_v.word_wrap = False
         p_v = tf_v.paragraphs[0]
         p_v.alignment = PP_ALIGN.CENTER
         r_v = p_v.add_run()
@@ -172,16 +180,16 @@ def generate_rainfall_pptx_report(
         r_v.font.bold = True
         r_v.font.color.rgb = WHITE
 
-        # Sub — small, bottom of card
+        # Sub — readable, bottom of card
         tb_s = slide.shapes.add_textbox(
-            Inches(left + 0.07), Inches(top + height - 0.23),
+            Inches(left + 0.07), Inches(top + height - 0.22),
             Inches(width - 0.14), Inches(0.20))
         tf_s = tb_s.text_frame
         p_s = tf_s.paragraphs[0]
         p_s.alignment = PP_ALIGN.CENTER
         r_s = p_s.add_run()
         r_s.text = sub
-        r_s.font.size = Pt(7.5)
+        r_s.font.size = Pt(8)
         r_s.font.color.rgb = sub_color
 
     def _kpi_row(slide, cards, top: float, card_h: float = 1.15):
@@ -243,7 +251,7 @@ def generate_rainfall_pptx_report(
     CHART_TOP  = 0.72   # inches below divider
     CHART_H    = 4.48   # inches  →  chart bottom = 5.20"
     KPI_TOP    = 5.33   # KPI row top
-    KPI_H      = 1.15   # KPI card height
+    KPI_H      = 0.85   # KPI card height (reduced for better proportion)
 
     # ── SLIDE 1: MONTHLY RAINFALL ─────────────────────────────────────────────
     def _monthly_rainfall():
@@ -412,12 +420,12 @@ def generate_rainfall_pptx_report(
             # Row 1 — aggregate (2 large cards)
             _kpi_row(slide, [
                 ("Total Annual Runoff",
-                 f"{int(round(total_annual * 1000))} L",
+                 _fmt_L(total_annual * 1000),
                  "All surfaces combined",
                  "#1d4ed8"),
                 ("Peak Runoff Month",
                  ml[peak_m - 1],
-                 f"{int(round(float(total_m[peak_m]) * 1000))} L",
+                 _fmt_L(float(total_m[peak_m]) * 1000),
                  "#dc2626"),
             ], top=ROW1_TOP, card_h=ROW_H)
 
@@ -425,7 +433,7 @@ def generate_rainfall_pptx_report(
             short = ["Roof", "Paved", "Green Area", "Waterbody"]
             _kpi_row(slide, [
                 (f"{short[i]}  RC {s['rc']:.2f}",
-                 f"{int(round(float(monthly_vols[s['key']].sum()) * 1000))} L",
+                 _fmt_L(float(monthly_vols[s["key"]].sum()) * 1000),
                  "Annual runoff",
                  s["color"])
                 for i, s in enumerate(_RUNOFF_SURFACES)
@@ -435,12 +443,11 @@ def generate_rainfall_pptx_report(
             _err(slide, e)
         _logo(slide)
 
-    _surface_runoff()
-
-    # ── SLIDE 4: GI BALANCE ───────────────────────────────────────────────────
+    # ── SLIDE 3: GI BALANCE / SLIDE 4: SURFACE RUNOFF ────────────────────────
+    # Order matches Streamlit tabs: Monthly → Rainy Days → Storage Potential → Runoff
     def _gi_balance():
         slide = prs.slides.add_slide(BLANK)
-        _title(slide, f"GI Recharge Balance  —  {station_name}, {year}")
+        _title(slide, f"Rainwater Harvesting Potential  —  {station_name}, {year}")
         _divider(slide)
 
         try:
@@ -473,8 +480,8 @@ def generate_rainfall_pptx_report(
             ax.set_xticklabels(ml, fontsize=10)
             ax.set_ylabel("Volume (L/m²)", fontsize=11, fontweight="bold")
             ax.set_title(
-                f"Monthly GI Recharge Balance – {year}  "
-                f"({gi_percentile}th-pctile baseline: {baseline_mm:.1f} mm/day)",
+                f"Monthly Rainwater Harvesting Potential – {year}  "
+                f"({gi_percentile}th-percentile baseline: {baseline_mm:.1f} mm/day)",
                 fontsize=12, fontweight="bold", pad=10, color="#333",
             )
             ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10),
@@ -488,12 +495,12 @@ def generate_rainfall_pptx_report(
                                      width=Inches(SW - 0.54), height=Inches(CHART_H))
             os.unlink(tmp)
 
-            worst_overflow_val = int(round(float(mgrp.loc[worst_m_idx, "overflow"])))
+            worst_overflow_val = float(mgrp.loc[worst_m_idx, "overflow"])
             _kpi_row(slide, [
-                ("Annual Recharge",   f"{int(round(total_recharge))} L/m²",  "Total stored by GI",          "#16a34a"),
-                ("Annual Overflow",   f"{int(round(total_overflow))} L/m²",  "Excess beyond capacity",      "#dc2626"),
-                ("Overflow Days",     str(overflow_days),                      f"Rain > {baseline_mm:.0f} mm", "#d97706"),
-                ("Worst Month",       ml[worst_m_idx - 1],                     f"{worst_overflow_val} L/m² overflow", "#7c3aed"),
+                ("Storage Potential",   f"{total_recharge:,.0f} L/m²",            "Total captured by GI",        "#16a34a"),
+                ("Recharge Potential",  f"{total_overflow:,.0f} L/m²",            "Excess beyond GI capacity",   "#dc2626"),
+                ("Overflow Days",       str(overflow_days),                         f"Rain > {baseline_mm:.0f} mm", "#d97706"),
+                ("Worst Overflow Month", ml[worst_m_idx - 1],                      f"{worst_overflow_val:,.0f} L/m²", "#7c3aed"),
             ], top=KPI_TOP, card_h=KPI_H)
 
         except Exception as e:
@@ -501,6 +508,7 @@ def generate_rainfall_pptx_report(
         _logo(slide)
 
     _gi_balance()
+    _surface_runoff()
 
     # ── SAVE ─────────────────────────────────────────────────────────────────
     out = io.BytesIO()

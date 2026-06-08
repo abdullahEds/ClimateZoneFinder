@@ -598,6 +598,11 @@ with col_left:
             _full_day_start_hour = 0
             _full_day_end_hour   = 23
 
+            # Rainfall params — included only when a station has been selected
+            _rain_stn = st.session_state.get("rainfall_station")
+            _rain_sid = rainfall_module.STATIONS.get(_rain_stn) if _rain_stn else None
+            _rain_yr  = int(st.session_state.get("rainfall_year", 2023)) if _rain_stn else None
+
             report_bytes = generate_combined_pptx_report(
                 df, _full_year_start, _full_year_end, _full_day_start_hour, _full_day_end_hour,
                 selected_parameter, metadata=metadata,
@@ -606,6 +611,21 @@ with col_left:
                 design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
                 n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
                 include_thermal_comfort=True,
+                rainfall_station_name=_rain_stn,
+                rainfall_station_id=_rain_sid,
+                rainfall_year=_rain_yr,
+                rainfall_start_month=st.session_state.get("start_month_idx", 0) + 1,
+                rainfall_end_month=st.session_state.get("end_month_idx", 11) + 1,
+                rainfall_heavy_threshold=float(st.session_state.get("rainfall_heavy_threshold", 50.0)),
+                rainfall_surface_areas={
+                    "roof":  float(st.session_state.get("runoff_area_roof",
+                                   st.session_state.get("rainfall_roof_area", 200.0))),
+                    "paved": float(st.session_state.get("runoff_area_paved", 0.0)),
+                    "green": float(st.session_state.get("runoff_area_green", 0.0)),
+                    "water": float(st.session_state.get("runoff_area_water", 0.0)),
+                } if _rain_stn else None,
+                rainfall_gi_percentile=int(st.session_state.get("balance_percentile", 95)),
+                rainfall_gi_start_year=int(st.session_state.get("balance_start_year", 1990)),
             )
 
             st.download_button(
