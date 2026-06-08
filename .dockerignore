@@ -1,0 +1,30 @@
+# Version control & virtual env
+.git
+.gitignore
+.venv
+
+# Python cache
+__pycache__
+pages/__pycache__
+pages/modules/__pycache__
+*.pyc
+*.pyo
+
+# Large data files not needed by the API
+*.epw
+*.xlsx
+~$*
+
+# Streamlit-only files
+requirements.txt
+app.py
+pages/analysis.py
+pages/about.py
+
+# Dev / build artifacts
+*.bat
+*.sh
+merge*.py
+do_merge.py
+final_merge.py
+COMPLETION_SUMMARY.md

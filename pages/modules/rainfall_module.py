@@ -5,7 +5,25 @@ import json
 import urllib.request
 import pandas as pd
 import plotly.graph_objects as go
-import streamlit as st
+
+try:
+    import streamlit as st
+except ImportError:
+    import types
+    st = types.SimpleNamespace(
+        cache_data=lambda **kw: (lambda fn: fn),
+        fragment=lambda fn: fn,
+        warning=lambda *a, **kw: None,
+        error=lambda *a, **kw: None,
+        info=lambda *a, **kw: None,
+        markdown=lambda *a, **kw: None,
+        plotly_chart=lambda *a, **kw: None,
+        columns=lambda *a, **kw: [],
+        tabs=lambda *a, **kw: [],
+        container=lambda *a, **kw: types.SimpleNamespace(
+            __enter__=lambda s: s, __exit__=lambda s, *a: None),
+        session_state={},
+    )
 
 STATIONS = {
     "Bengaluru":              "IN009010100",
