@@ -16,12 +16,16 @@ def calculate_ashrae_comfort(df: pd.DataFrame) -> tuple:
         as daily rolling averages indexed by doy.
     """
     daily_avg = df.groupby("doy")["dry_bulb_temperature"].mean()
-    comfort_line = daily_avg.rolling(window=7, center=True).mean()
+    # ASHRAE 55 prevailing mean outdoor temperature (7-day running mean)
+    # Clipped to the model's valid applicability range: 10–33.5 °C
+    t_running_mean = daily_avg.rolling(window=7, center=True, min_periods=1).mean().clip(10, 33.5)
+    # ASHRAE 55 adaptive comfort neutral temperature
+    t_comfort = 0.31 * t_running_mean + 17.8
     return (
-        comfort_line - 3.5,
-        comfort_line + 3.5,
-        comfort_line - 2.5,
-        comfort_line + 2.5,
+        t_comfort - 3.5,
+        t_comfort + 3.5,
+        t_comfort - 2.5,
+        t_comfort + 2.5,
     )
 
 
@@ -36,7 +40,7 @@ def render(
 ) -> None:
     """Dispatch rendering based on the active tab."""
     if active_tab == "Annual Trend":
-        _render_annual_trend(df, daily_stats, start_date, end_date, start_hour, end_hour)
+        _render_annual_trend(df, daily_stats, start_date, end_date)
     elif active_tab == "Monthly Trend":
         _render_monthly_trend(df, start_date, end_date)
     elif active_tab == "Diurnal Profile":
@@ -50,7 +54,7 @@ def render(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _render_annual_trend(df, daily_stats, start_date, end_date, start_hour, end_hour):
+def _render_annual_trend(df, daily_stats, start_date, end_date):
     start_month_num = start_date.month
     end_month_num   = end_date.month
 
@@ -66,13 +70,13 @@ def _render_annual_trend(df, daily_stats, start_date, end_date, start_hour, end_
     # ── Greyed-out: before selected range ─────────────────────────────────────
     if start_doy > 1:
         before = daily_stats[daily_stats["doy"] < start_doy]
-        fig.add_trace(go.Scatter(x=before["datetime_display"], y=before["temp_max"],
-                                 fill=None, mode="lines", line_color="rgba(100,100,100,0)",
-                                 showlegend=False, hoverinfo="skip"))
-        fig.add_trace(go.Scatter(x=before["datetime_display"], y=before["temp_min"],
-                                 fill="tonexty", mode="lines", line_color="rgba(100,100,100,0)",
-                                 fillcolor="rgba(180,180,180,0.15)",
-                                 name="Unselected Period", showlegend=True, hoverinfo="skip"))
+        fig.add_trace(go.Bar(x=before["datetime_display"],
+                             y=before["temp_max"] - before["temp_min"],
+                             base=before["temp_min"],
+                             name="Unselected Period",
+                             marker_color="rgba(180,180,180,0.3)",
+                             marker_line_width=0,
+                             showlegend=True, hoverinfo="skip"))
         fig.add_trace(go.Scatter(x=before["datetime_display"], y=before["temp_avg"],
                                  mode="lines", line=dict(color="rgba(150,150,150,0.4)", width=1, dash="dot"),
                                  showlegend=False, hoverinfo="skip"))
@@ -80,34 +84,35 @@ def _render_annual_trend(df, daily_stats, start_date, end_date, start_hour, end_
     # ── Active range ──────────────────────────────────────────────────────────
     active = daily_stats[(daily_stats["doy"] >= start_doy) & (daily_stats["doy"] <= end_doy)]
 
-    # ASHRAE 80% band
-    fig.add_trace(go.Scatter(x=active["datetime_display"], y=active["comfort_80_upper"],
-                             fill=None, mode="lines", line_color="rgba(128,128,128,0)",
-                             showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=active["datetime_display"], y=active["comfort_80_lower"],
-                             fill="tonexty", mode="lines", line_color="rgba(128,128,128,0)",
-                             name="ASHRAE adaptive comfort (80%)",
-                             fillcolor="rgba(128,128,128,0.2)", hoverinfo="skip"))
+    # ASHRAE 80% band – bars, rendered first so they sit behind the 90% and temp bars
+    fig.add_trace(go.Bar(x=active["datetime_display"],
+                         y=active["comfort_80_upper"] - active["comfort_80_lower"],
+                         base=active["comfort_80_lower"],
+                         name="ASHRAE adaptive comfort (80%)",
+                         marker_color="rgba(128,128,128,0.18)",
+                         marker_line_width=0,
+                         customdata=active["comfort_80_upper"],
+                         hovertemplate="<b>%{x}</b><br>80% comfort: %{base:.1f}–%{customdata:.1f}°C<extra></extra>"))
 
     # ASHRAE 90% band
-    fig.add_trace(go.Scatter(x=active["datetime_display"], y=active["comfort_90_upper"],
-                             fill=None, mode="lines", line_color="rgba(128,128,128,0)",
-                             showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=active["datetime_display"], y=active["comfort_90_lower"],
-                             fill="tonexty", mode="lines", line_color="rgba(128,128,128,0)",
-                             name="ASHRAE adaptive comfort (90%)",
-                             fillcolor="rgba(128,128,128,0.4)", hoverinfo="skip"))
+    fig.add_trace(go.Bar(x=active["datetime_display"],
+                         y=active["comfort_90_upper"] - active["comfort_90_lower"],
+                         base=active["comfort_90_lower"],
+                         name="ASHRAE adaptive comfort (90%)",
+                         marker_color="rgba(128,128,128,0.38)",
+                         marker_line_width=0,
+                         customdata=active["comfort_90_upper"],
+                         hovertemplate="<b>%{x}</b><br>90% comfort: %{base:.1f}–%{customdata:.1f}°C<extra></extra>"))
 
-    # Temp min/max band
-    fig.add_trace(go.Scatter(x=active["datetime_display"], y=active["temp_max"],
-                             fill=None, mode="lines", line_color="rgba(255,0,0,0)",
-                             showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=active["datetime_display"], y=active["temp_min"],
-                             fill="tonexty", mode="lines", line_color="rgba(255,0,0,0)",
-                             name="Dry bulb temperature Range",
-                             fillcolor="rgba(255,173,173,0.4)",
-                             customdata=active["temp_max"],
-                             hovertemplate="<b>%{x}</b><br>Min: %{y:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>"))
+    # Temp min/max bars
+    fig.add_trace(go.Bar(x=active["datetime_display"],
+                         y=active["temp_max"] - active["temp_min"],
+                         base=active["temp_min"],
+                         name="Dry bulb temperature Range",
+                         marker_color="rgba(255,100,100,0.55)",
+                         marker_line_width=0,
+                         customdata=active["temp_max"],
+                         hovertemplate="<b>%{x}</b><br>Min: %{base:.2f}°C<br>Max: %{customdata:.2f}°C<extra></extra>"))
 
     # Average line
     fig.add_trace(go.Scatter(x=active["datetime_display"], y=active["temp_avg"],
@@ -119,12 +124,12 @@ def _render_annual_trend(df, daily_stats, start_date, end_date, start_hour, end_
     if end_doy < 365:
         after = daily_stats[daily_stats["doy"] > end_doy]
         if not after.empty:
-            fig.add_trace(go.Scatter(x=after["datetime_display"], y=after["temp_max"],
-                                     fill=None, mode="lines", line_color="rgba(100,100,100,0)",
-                                     showlegend=False, hoverinfo="skip"))
-            fig.add_trace(go.Scatter(x=after["datetime_display"], y=after["temp_min"],
-                                     fill="tonexty", mode="lines", line_color="rgba(100,100,100,0)",
-                                     fillcolor="rgba(180,180,180,0.15)", showlegend=False, hoverinfo="skip"))
+            fig.add_trace(go.Bar(x=after["datetime_display"],
+                                 y=after["temp_max"] - after["temp_min"],
+                                 base=after["temp_min"],
+                                 marker_color="rgba(180,180,180,0.3)",
+                                 marker_line_width=0,
+                                 showlegend=False, hoverinfo="skip"))
             fig.add_trace(go.Scatter(x=after["datetime_display"], y=after["temp_avg"],
                                      mode="lines", line=dict(color="rgba(150,150,150,0.4)", width=1, dash="dot"),
                                      showlegend=False, hoverinfo="skip"))
@@ -137,6 +142,7 @@ def _render_annual_trend(df, daily_stats, start_date, end_date, start_hour, end_
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis_rangeslider_visible=False,
+        barmode="overlay",
         height=450,
         template="plotly_white",
         margin=dict(b=80),
@@ -144,29 +150,39 @@ def _render_annual_trend(df, daily_stats, start_date, end_date, start_hour, end_
     st.plotly_chart(fig, use_container_width=True)
 
     # ── KPI cards ─────────────────────────────────────────────────────────────
-    filtered = df[
-        (df["datetime"].dt.date >= start_date) &
-        (df["datetime"].dt.date <= end_date) &
-        (df["hour"].between(start_hour, end_hour))
-    ]
-
-    if filtered.empty:
-        st.info(f"No data between {start_hour:02d}:00 and {end_hour:02d}:00 in the selected date range.")
+    if df.empty:
+        st.info("No data available.")
         return
 
-    min_row = filtered.loc[filtered["dry_bulb_temperature"].idxmin()]
-    max_row = filtered.loc[filtered["dry_bulb_temperature"].idxmax()]
-    temp_min  = min_row["dry_bulb_temperature"]
-    temp_max  = max_row["dry_bulb_temperature"]
-    temp_avg  = filtered["dry_bulb_temperature"].mean()
-    diurnal   = temp_max - temp_min
-    min_ds    = min_row["datetime"].strftime("%b %d")
-    max_ds    = max_row["datetime"].strftime("%b %d")
-    min_hr    = int(min_row["hour"])
-    max_hr    = int(max_row["hour"])
+    # Min/Max are annual records — always use the full dataset regardless of
+    # the selected date window, so the user always sees the true yearly peaks.
+    min_row  = df.loc[df["dry_bulb_temperature"].idxmin()]
+    max_row  = df.loc[df["dry_bulb_temperature"].idxmax()]
+    temp_min = min_row["dry_bulb_temperature"]
+    temp_max = max_row["dry_bulb_temperature"]
+    min_ds   = min_row["datetime"].strftime("%b %d")
+    max_ds   = max_row["datetime"].strftime("%b %d")
+    min_hr   = int(min_row["hour"])
+    max_hr   = int(max_row["hour"])
 
-    hdd18          = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum()
-    cdd24          = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum()
+    # Avg and diurnal use only the selected date window
+    date_filtered = df[
+        (df["datetime"].dt.date >= start_date) &
+        (df["datetime"].dt.date <= end_date)
+    ]
+    temp_avg = date_filtered["dry_bulb_temperature"].mean() if not date_filtered.empty else df["dry_bulb_temperature"].mean()
+
+    # Diurnal range: mean of (daily max − daily min) over the selected period
+    daily_source = date_filtered if not date_filtered.empty else df
+    daily_extremes = daily_source.groupby(daily_source["datetime"].dt.date).agg(
+        d_max=("dry_bulb_temperature", "max"),
+        d_min=("dry_bulb_temperature", "min"),
+    )
+    diurnal = (daily_extremes["d_max"] - daily_extremes["d_min"]).mean()
+
+    # Degree-days: sum hourly differences then divide by 24 → standard °C·day units
+    hdd18          = (18 - df["dry_bulb_temperature"]).clip(lower=0).sum() / 24
+    cdd24          = (df["dry_bulb_temperature"] - 24).clip(lower=0).sum() / 24
     mean_t         = df["dry_bulb_temperature"].mean()
     comfort_hrs    = len(df[(df["dry_bulb_temperature"] >= mean_t - 3.5) &
                             (df["dry_bulb_temperature"] <= mean_t + 3.5)])

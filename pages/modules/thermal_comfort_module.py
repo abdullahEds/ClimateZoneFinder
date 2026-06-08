@@ -85,6 +85,26 @@ _STRATEGY_COLORS = {
     "Night Flushing / Thermal Mass":"#8e44ad",
 }
 
+# ── Comfort bubble chart: 9-zone psychrographic classification ────────────────
+# Temperature thresholds: 22 °C (cold/comfort), 28.5 °C (comfort/hot), 33 °C (hot/extreme)
+# RH thresholds         : 30 % (dry/moderate), 70 % (moderate/humid)
+_BUBBLE_CATS = [
+    "Cold & Humid", "Cold", "Cold & Dry",
+    "Humid", "Comfortable", "Dry",
+    "Hot & Humid", "Hot", "Hot & Dry",
+]
+_BUBBLE_COLORS: dict = {
+    "Cold & Humid":  "#0d47a1",   # Dark Blue
+    "Cold":          "#1976d2",   # Medium Blue
+    "Cold & Dry":    "#90caf9",   # Light Blue
+    "Humid":         "#9e9e9e",   # Grey
+    "Comfortable":   "#00c853",   # Vibrant Green
+    "Dry":           "#a5d6a7",   # Light Green
+    "Hot & Humid":   "#8d6e63",   # Brown / muted orange
+    "Hot":           "#ff9800",   # Orange
+    "Hot & Dry":     "#d32f2f",   # Red
+}
+
 
 # ─── Core computation functions ───────────────────────────────────────────────
 
@@ -213,6 +233,55 @@ def classify_comfort(df: pd.DataFrame) -> pd.DataFrame:
     ]
     choices = ["Comfortable", "Too Hot", "Too Cold", "Too Humid", "Too Dry"]
     out["comfort_cat"] = np.select(conditions, choices, default="Too Hot")
+    return out
+
+
+def classify_bubble_comfort(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Classify each row into one of 9 psychrographic comfort zones.
+
+    Strict 3 × 3 grid — temperature zone × RH zone, no exceptions:
+
+        RH \\ DBT   | < 22 °C      | 22–28.5 °C  | > 28.5 °C
+        -----------|--------------|-------------|-------------
+        > 70 %     | Cold & Humid | Humid       | Hot & Humid
+        30–70 %    | Cold         | Comfortable | Hot
+        < 30 %     | Cold & Dry   | Dry         | Hot & Dry
+
+    RH thresholds follow the standard definition:
+        > 70 % = humid,  30–70 % = moderate,  < 30 % = dry
+    Temperature thresholds:  22 °C and 28.5 °C.
+    Adds column: bubble_comfort
+    """
+    out = df.copy()
+    T  = pd.to_numeric(out["dry_bulb_temperature"], errors="coerce")
+    RH = pd.to_numeric(out["relative_humidity"],    errors="coerce")
+
+    cold    = T < 22.0
+    comfort = (T >= 22.0) & (T <= 28.5)
+    hot     = T > 28.5            # covers both moderate and extreme heat uniformly
+
+    dry      = RH < 30.0
+    moderate = (RH >= 30.0) & (RH <= 70.0)
+    humid    = RH > 70.0
+
+    conditions = [
+        cold    & humid,
+        cold    & moderate,
+        cold    & dry,
+        comfort & humid,
+        comfort & moderate,
+        comfort & dry,
+        hot     & humid,
+        hot     & moderate,
+        hot     & dry,
+    ]
+    choices = [
+        "Cold & Humid", "Cold", "Cold & Dry",
+        "Humid", "Comfortable", "Dry",
+        "Hot & Humid", "Hot", "Hot & Dry",
+    ]
+    out["bubble_comfort"] = np.select(conditions, choices, default="Comfortable")
     return out
 
 
@@ -809,6 +878,209 @@ def _render_adaptive_comfort_chart(df: pd.DataFrame, months: list) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
+# ─── Comfort bubble chart ─────────────────────────────────────────────────────
+
+def build_comfort_bubble_chart(df: pd.DataFrame, sample_every: int = 4) -> go.Figure:
+    """
+    Build a dynamic, climate-agnostic comfort bubble chart from EPW hourly data.
+
+    Encoding
+    --------
+    X-axis  : Dry Bulb Temperature (°C) — range auto-fitted to the dataset ± 2 °C
+    Y-axis  : Relative Humidity (%) — fixed 0–100 %
+    Size    : Wind Speed (m/s), scaled to pixel diameter (min 5 px, max 30 px)
+    Color   : 9-class Comfort Category (strict 3×3 temp × RH grid, fixed palette)
+    Angle   : Wind Direction (0° = North / straight-up, clockwise) via marker_angle
+
+    Each comfort category is rendered as a separate trace so the legend is
+    interactive (click to isolate / hide a zone).
+
+    Parameters
+    ----------
+    df           : EPW DataFrame with columns dry_bulb_temperature, relative_humidity,
+                   wind_speed, wind_direction, datetime.
+    sample_every : Downsample factor.  Default 4 → ≈2 200 pts from a full-year file,
+                   which renders smoothly.  Set to 1 for full resolution.
+
+    Returns
+    -------
+    go.Figure  (does NOT call st.plotly_chart — caller decides where to render)
+    """
+    wdf = classify_bubble_comfort(df).iloc[::sample_every].copy().reset_index(drop=True)
+
+    T  = pd.to_numeric(wdf["dry_bulb_temperature"], errors="coerce")
+    RH = pd.to_numeric(wdf["relative_humidity"],    errors="coerce")
+    WS = pd.to_numeric(wdf["wind_speed"],           errors="coerce").fillna(0.0)
+    WD = pd.to_numeric(wdf["wind_direction"],       errors="coerce").fillna(0.0)
+
+    # Pixel diameter: min 5 (calm) → max 30 (strong wind)
+    bubble_px = np.clip(WS * 3.5 + 5.0, 5.0, 30.0)
+
+    # Dynamic x-axis — works for Arctic lows and tropical highs alike
+    x_min = float(T.min()) - 2.0
+    x_max = float(T.max()) + 2.0
+
+    dt_str = (
+        wdf["datetime"].dt.strftime("%b %d %H:%M")
+        if "datetime" in wdf.columns
+        else pd.Series([""] * len(wdf), dtype=str)
+    )
+
+    fig = go.Figure()
+
+    # ── Zone reference grid ───────────────────────────────────────────────────
+    # Vertical lines at temperature thresholds (only drawn if inside data range)
+    for x_div, lbl in [(22.0, "22 °C"), (28.5, "28.5 °C")]:
+        if x_min < x_div < x_max:
+            fig.add_vline(
+                x=x_div,
+                line=dict(color="rgba(0,0,0,0.13)", width=1.0, dash="dot"),
+                annotation_text=lbl,
+                annotation_position="top left",
+                annotation_font=dict(size=9, color="rgba(80,80,80,0.65)"),
+            )
+
+    # Horizontal lines at RH thresholds
+    for y_div, lbl in [(30.0, "30% RH"), (70.0, "70% RH")]:
+        fig.add_hline(
+            y=y_div,
+            line=dict(color="rgba(0,0,0,0.11)", width=1.0, dash="dot"),
+            annotation_text=lbl,
+            annotation_position="right",
+            annotation_font=dict(size=9, color="rgba(80,80,80,0.65)"),
+        )
+
+    # ── One scatter trace per comfort category ────────────────────────────────
+    # Rendered in _BUBBLE_CATS order so colder/greener zones sit beneath warmer ones
+    for cat in _BUBBLE_CATS:
+        mask = (wdf["bubble_comfort"] == cat).values
+        if not mask.any():
+            continue
+
+        fig.add_trace(go.Scatter(
+            x=T.values[mask],
+            y=RH.values[mask],
+            mode="markers",
+            name=cat,
+            marker=dict(
+                symbol="triangle-up",
+                size=bubble_px.values[mask],
+                color=_BUBBLE_COLORS[cat],
+                opacity=0.65,
+                # marker_angle: 0° = pointing up (North).  EPW wind direction
+                # is "direction FROM which wind blows" in the same convention,
+                # so the direct mapping is correct.
+                angle=WD.values[mask],
+                line=dict(width=0.4, color="rgba(0,0,0,0.20)"),
+            ),
+            customdata=np.column_stack([
+                WS.values[mask],
+                WD.values[mask],
+                dt_str.values[mask],
+            ]),
+            hovertemplate=(
+                "<b>%{customdata[2]}</b><br>"
+                "Temperature : %{x:.1f} °C<br>"
+                "Humidity    : %{y:.0f} %<br>"
+                "Wind Speed  : %{customdata[0]:.1f} m/s<br>"
+                "Wind Dir    : %{customdata[1]:.0f}°"
+                "<extra></extra>"
+            ),
+        ))
+
+    # ── Layout ────────────────────────────────────────────────────────────────
+    fig.update_layout(
+        title="Temperature – Humidity – Wind Speed (Detailed Comfort Analysis)",
+        xaxis=dict(
+            title="Dry Bulb Temperature (°C)",
+            range=[x_min, x_max],
+            gridcolor="#f0f0f0",
+            zeroline=True,
+            zerolinecolor="rgba(0,0,0,0.18)",
+            zerolinewidth=1.0,
+        ),
+        yaxis=dict(
+            title="Relative Humidity (%)",
+            range=[0, 100],
+            gridcolor="#f0f0f0",
+        ),
+        template="plotly_white",
+        height=580,
+        legend=dict(
+            title="Comfort Category",
+            orientation="v",
+            x=1.02,
+            y=1.0,
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="rgba(0,0,0,0.10)",
+            borderwidth=1,
+        ),
+        margin=dict(r=200, t=60, b=60),
+        hovermode="closest",
+    )
+
+    return fig
+
+
+def _render_comfort_bubble_chart(
+    df: pd.DataFrame,
+    months: list,
+    start_hour: int = 0,
+    end_hour: int = 23,
+) -> None:
+    """Render the comfort bubble chart and per-category hour metrics."""
+    fdf = df[df["month"].isin(months)].copy() if months else df.copy()
+    if start_hour > 0 or end_hour < 23:
+        fdf = fdf[fdf["hour"].between(start_hour, end_hour)]
+    if fdf.empty:
+        st.info("No data for the selected months/hours.")
+        return
+
+    st.caption(
+        "Each marker represents one hourly observation.  "
+        "**Size** = wind speed · **Direction** = wind origin (triangle points toward source, 0° = North).  "
+        "Click legend entries to isolate comfort zones."
+    )
+    st.plotly_chart(build_comfort_bubble_chart(fdf), use_container_width=True)
+
+    # ── Per-category hour counts ───────────────────────────────────────────────
+    classified = classify_bubble_comfort(fdf)
+    total_hrs  = len(classified)
+
+    st.markdown("#### Hours by Comfort Category")
+    st.caption(
+        "Columns = temperature zone (Cold / Comfort / Hot) · "
+        "Rows = humidity zone (Humid → Moderate → Dry)"
+    )
+
+    # 3 × 3 grid matching the psychrographic grid orientation
+    grid = [
+        ["Cold & Humid", "Humid",        "Hot & Humid"],
+        ["Cold",         "Comfortable",  "Hot"        ],
+        ["Cold & Dry",   "Dry",          "Hot & Dry"  ],
+    ]
+
+    for row_cats in grid:
+        cols = st.columns(3)
+        for col, cat in zip(cols, row_cats):
+            count = int((classified["bubble_comfort"] == cat).sum())
+            pct   = count / total_hrs * 100 if total_hrs > 0 else 0.0
+            color = _BUBBLE_COLORS[cat]
+            with col:
+                st.markdown(
+                    f'<div style="background:white;padding:14px;border-radius:8px;'
+                    f'border-left:4px solid {color};box-shadow:0 2px 4px rgba(0,0,0,0.08);'
+                    f'text-align:center;margin-bottom:8px;">'
+                    f'<div style="font-size:11px;font-weight:700;color:{color};'
+                    f'text-transform:uppercase;letter-spacing:0.5px;">{cat}</div>'
+                    f'<div style="font-size:22px;font-weight:700;color:#2c3e50;margin:6px 0;">'
+                    f'{count:,} hrs</div>'
+                    f'<div style="font-size:12px;color:#718096;">{pct:.1f}% of period</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+
 # ─── KPI card helper ──────────────────────────────────────────────────────────
 
 def _kpi(label: str, value: str, meta: str = "") -> str:
@@ -829,6 +1101,8 @@ def render(
     months: list = None,
     comfort_model: str = "Both",
     air_speed_adjust: bool = False,
+    start_hour: int = 0,
+    end_hour: int = 23,
 ) -> None:
     """
     Render all Thermal Comfort visualisations and design summary.
@@ -941,16 +1215,18 @@ def render(
         "Comfort Heatmap",
         "Strategy Map",
         "Degree Hours",
+        "Comfort Bubble",
     ]
-    # btn_cols = st.columns(len(tc_tabs), gap="small")
-    # for col, tab_name in zip(btn_cols, tc_tabs):
-    #     with col:
-    #         if st.button(tab_name, key=f"tc_tab_{tab_name}", use_container_width=True):
-    #             st.session_state[tab_key] = tab_name
-
-    # using tabs component which is used in other modules
     tabs = st.tabs(tc_tabs)
-    tab_psychrometric, tab_adaptive, tab_monthly, tab_heatmap, tab_strategy, tab_degrees = tabs
+    (
+        tab_psychrometric,
+        tab_adaptive,
+        tab_monthly,
+        tab_heatmap,
+        tab_strategy,
+        tab_degrees,
+        tab_bubble,
+    ) = tabs
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -975,6 +1251,14 @@ def render(
 
     with tab_degrees:
         _render_degree_hours_chart(degree, months)
+
+    with tab_bubble:
+        try:
+            _render_comfort_bubble_chart(fdf, months, start_hour=start_hour, end_hour=end_hour)
+        except Exception as _bubble_err:
+            st.error(f"Comfort Bubble chart error: {_bubble_err}")
+            import traceback
+            st.code(traceback.format_exc())
 
     # ── Comfort breakdown summary ─────────────────────────────────────────────
     st.markdown("---")

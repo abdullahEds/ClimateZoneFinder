@@ -52,6 +52,16 @@ def generate_combined_pptx_report(
     design_cutoff_angle: float = 45.0,
     n_sectors: int = 16,
     include_thermal_comfort: bool = False,
+    # ── Optional Rainfall Analysis ─────────────────────────────────────────────
+    rainfall_station_name: str = None,
+    rainfall_station_id: str = None,
+    rainfall_year: int = None,
+    rainfall_start_month: int = 1,
+    rainfall_end_month: int = 12,
+    rainfall_heavy_threshold: float = 50.0,
+    rainfall_surface_areas: dict = None,
+    rainfall_gi_percentile: int = 95,
+    rainfall_gi_start_year: int = 1990,
 ):
     """Generate a combined PowerPoint report with Climate + Shading Analysis + Assumptions slide."""
 
@@ -1202,8 +1212,8 @@ def generate_combined_pptx_report(
         try:
             from modules.wind_module import (
                 prepare_wind_data, compute_wind_rose, compute_wind_statistics,
-                plot_wind_rose, plot_speed_heatmap, plot_direction_heatmap,
-                plot_speed_histogram, plot_climate_bubble
+                _SPEED_LABELS, _SPEED_COLORS, _SPEED_BINS,
+                _DIR_16, _DIR_8, _DIR_4, _MONTH_NAMES, _MONTH_COLORS,
             )
         except ImportError:
             return  # Skip if wind module not available
@@ -1218,6 +1228,161 @@ def generate_combined_pptx_report(
         rose_df, calm_pct = compute_wind_rose(wdf, n_sectors, exclude_calm=False)
         stats = compute_wind_statistics(wdf)
 
+        # ── Matplotlib chart helpers (no kaleido / Chrome required) ─────────
+        def _mpl_wind_rose_png():
+            sector_width = 360.0 / n_sectors
+            if n_sectors == 16:
+                lbl = _DIR_16
+            elif n_sectors == 8:
+                lbl = _DIR_8
+            elif n_sectors == 4:
+                lbl = _DIR_4
+            else:
+                lbl = [f"{int(i * sector_width)}°" for i in range(n_sectors)]
+            angles = np.array([np.deg2rad(i * sector_width) for i in range(n_sectors)])
+            bar_w = np.deg2rad(sector_width) * 0.85
+            fig2, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(9, 7))
+            bottoms = np.zeros(n_sectors)
+            for i, sl in enumerate(_SPEED_LABELS):
+                subset = rose_df[rose_df["speed_bin"] == sl]
+                fm = dict(zip(subset["direction_label"], subset["frequency_pct"]))
+                freqs = np.array([fm.get(l, 0.0) for l in lbl])
+                ax.bar(angles, freqs, width=bar_w, bottom=bottoms,
+                       color=_SPEED_COLORS[i % len(_SPEED_COLORS)],
+                       label=f"{sl} m/s", alpha=0.9, linewidth=0.3, edgecolor="white")
+                bottoms += freqs
+            ax.set_theta_zero_location("N")
+            ax.set_theta_direction(-1)
+            ax.set_xticks(angles)
+            ax.set_xticklabels(lbl, fontsize=9)
+            ax.tick_params(axis="y", labelsize=8)
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}%"))
+            ax.set_title("Wind Rose", fontsize=14, pad=20, color="#2c3e50", fontweight="bold")
+            ax.annotate(f"Calm\n{calm_pct:.1f}%", xy=(0, 0), xycoords="data",
+                        ha="center", va="center", fontsize=10, color="#555555")
+            ax.legend(loc="lower left", bbox_to_anchor=(1.05, 0.0),
+                      fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
+            plt.tight_layout()
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            plt.close(fig2)
+            return path
+
+        def _mpl_speed_heatmap_png():
+            pivot = wdf.pivot_table(values="wind_speed", index="hour",
+                                    columns="month", aggfunc="mean")
+            for m in range(1, 13):
+                if m not in pivot.columns:
+                    pivot[m] = np.nan
+            pivot = pivot[sorted(pivot.columns)]
+            month_labels = [_MONTH_NAMES[m - 1] for m in sorted(pivot.columns)]
+            fig2, ax = plt.subplots(figsize=(12, 5))
+            im = ax.imshow(pivot.values, aspect="auto", cmap="viridis", interpolation="nearest")
+            ax.set_xlabel("Month", fontsize=11)
+            ax.set_ylabel("Hour of Day", fontsize=11)
+            ax.set_title("Wind Speed – Month × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+            ax.set_xticks(range(12))
+            ax.set_xticklabels(month_labels, fontsize=9)
+            ax.set_yticks(range(0, 24, 3))
+            ax.set_yticklabels([f"{h:02d}:00" for h in range(0, 24, 3)], fontsize=9)
+            plt.colorbar(im, ax=ax, label="m/s", shrink=0.8)
+            plt.tight_layout()
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            plt.close(fig2)
+            return path
+
+        def _mpl_direction_heatmap_png():
+            tmp_df = wdf.copy()
+            rad = np.deg2rad(tmp_df["wind_direction"])
+            tmp_df["_u"] = np.cos(rad)
+            tmp_df["_v"] = np.sin(rad)
+            up = tmp_df.pivot_table(values="_u", index="hour", columns="month", aggfunc="mean")
+            vp = tmp_df.pivot_table(values="_v", index="hour", columns="month", aggfunc="mean")
+            up, vp = up.align(vp, join="inner")
+            dir_deg = np.degrees(np.arctan2(vp.values, up.values)) % 360
+            month_cols = sorted(up.columns.tolist())
+            month_labels = [_MONTH_NAMES[m - 1] for m in month_cols]
+            fig2, ax = plt.subplots(figsize=(12, 5))
+            im = ax.imshow(dir_deg, aspect="auto", cmap="twilight",
+                           vmin=0, vmax=360, interpolation="nearest")
+            ax.set_xlabel("Month", fontsize=11)
+            ax.set_ylabel("Hour of Day", fontsize=11)
+            ax.set_title("Wind Direction – Month × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+            ax.set_xticks(range(len(month_cols)))
+            ax.set_xticklabels(month_labels, fontsize=9)
+            ax.set_yticks(range(0, 24, 3))
+            ax.set_yticklabels([f"{h:02d}:00" for h in range(0, 24, 3)], fontsize=9)
+            cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+            cbar.set_ticks([0, 90, 180, 270, 360])
+            cbar.set_ticklabels(["N 0°", "E 90°", "S 180°", "W 270°", "N 360°"])
+            cbar.set_label("Direction")
+            plt.tight_layout()
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            plt.close(fig2)
+            return path
+
+        def _mpl_speed_histogram_png():
+            total = len(wdf)
+            labels, pcts = [], []
+            for i in range(len(_SPEED_BINS) - 1):
+                lo, hi = _SPEED_BINS[i], _SPEED_BINS[i + 1]
+                count = int(((wdf["wind_speed"] >= lo) & (wdf["wind_speed"] < hi)).sum())
+                labels.append(_SPEED_LABELS[i])
+                pcts.append(count / total * 100.0 if total > 0 else 0.0)
+            fig2, ax = plt.subplots(figsize=(10, 5))
+            bars = ax.bar(labels, pcts, color=_SPEED_COLORS[:len(labels)], alpha=0.9, edgecolor="white")
+            for bar, pct in zip(bars, pcts):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                        f"{pct:.1f}%", ha="center", va="bottom", fontsize=10)
+            ax.set_xlabel("Wind Speed Bin (m/s)", fontsize=11)
+            ax.set_ylabel("Frequency (%)", fontsize=11)
+            ax.set_title("Wind Speed Distribution", fontsize=14, color="#2c3e50", fontweight="bold")
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0f}%"))
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            plt.tight_layout()
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            plt.close(fig2)
+            return path
+
+        def _mpl_climate_bubble_png():
+            needed = {"dry_bulb_temperature", "relative_humidity", "wind_speed", "month"}
+            fig2, ax = plt.subplots(figsize=(10, 6))
+            if not needed.issubset(wdf.columns):
+                ax.text(0.5, 0.5, "Missing columns for bubble chart",
+                        ha="center", va="center", transform=ax.transAxes, fontsize=13)
+            else:
+                tmp_df = wdf.dropna(subset=["dry_bulb_temperature", "relative_humidity", "wind_speed"]).copy()
+                max_spd = float(tmp_df["wind_speed"].max())
+                scale = 500.0 / max_spd if max_spd > 0 else 50.0
+                for m in range(1, 13):
+                    mdata = tmp_df[tmp_df["month"] == m]
+                    if mdata.empty:
+                        continue
+                    ax.scatter(mdata["dry_bulb_temperature"], mdata["relative_humidity"],
+                               s=(mdata["wind_speed"] + 0.3) * scale,
+                               c=_MONTH_COLORS[(m - 1) % len(_MONTH_COLORS)],
+                               alpha=0.45, linewidths=0, label=_MONTH_NAMES[m - 1])
+                ax.set_xlabel("Dry Bulb Temperature (°C)", fontsize=11)
+                ax.set_ylabel("Relative Humidity (%)", fontsize=11)
+                ax.set_ylim(0, 105)
+                ax.legend(title="Month", fontsize=9, title_fontsize=9,
+                          loc="center left", bbox_to_anchor=(1, 0.5))
+                ax.text(0.01, 0.98, "Bubble size = wind speed (m/s)",
+                        transform=ax.transAxes, fontsize=10, color="#888", va="top")
+            ax.set_title("Temperature – Humidity – Wind Speed", fontsize=14,
+                         color="#2c3e50", fontweight="bold")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            plt.tight_layout()
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            plt.close(fig2)
+            return path
+
         # ── Wind Rose Slide ─────────────────────────────────────────────────
         def _wind_rose_slide():
             slide = prs.slides.add_slide(BLANK_LAYOUT)
@@ -1225,47 +1390,89 @@ def generate_combined_pptx_report(
             _add_divider(slide, 0.62)
 
             try:
-                fig = plot_wind_rose(rose_df, calm_pct, n_sectors)
-                
-                # Convert Plotly to static image
-                try:
-                    import plotly.io as pio
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                    tmp.close()
-                    pio.write_image(fig, tmp.name, width=1200, height=600)
-                    
-                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                             width=Inches(SW - 0.54), height=Inches(5.9))
-                    os.unlink(tmp.name)
-                except Exception as pe:
-                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+                img_path = _mpl_wind_rose_png()
+                chart_w = 7.5
+                slide.shapes.add_picture(img_path, Inches((SW - chart_w) / 2), Inches(0.80),
+                                         width=Inches(chart_w))
+                os.unlink(img_path)
             except Exception as e:
                 _err_box(slide, e)
 
             _add_logo(slide)
 
+        def _mpl_single_season_rose_png(rose_df_s, calm_pct_s, season_name):
+            sector_width = 360.0 / n_sectors
+            if n_sectors == 16:
+                lbl = _DIR_16
+            elif n_sectors == 8:
+                lbl = _DIR_8
+            elif n_sectors == 4:
+                lbl = _DIR_4
+            else:
+                lbl = [f"{int(i * sector_width)}°" for i in range(n_sectors)]
+            angles = np.array([np.deg2rad(i * sector_width) for i in range(n_sectors)])
+            bar_w = np.deg2rad(sector_width) * 0.85
+            fig2, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(9, 7))
+            bottoms = np.zeros(n_sectors)
+            for i, sl in enumerate(_SPEED_LABELS):
+                subset = rose_df_s[rose_df_s["speed_bin"] == sl]
+                fm = dict(zip(subset["direction_label"], subset["frequency_pct"]))
+                freqs = np.array([fm.get(l, 0.0) for l in lbl])
+                ax.bar(angles, freqs, width=bar_w, bottom=bottoms,
+                       color=_SPEED_COLORS[i % len(_SPEED_COLORS)],
+                       label=f"{sl} m/s", alpha=0.9, linewidth=0.3, edgecolor="white")
+                bottoms += freqs
+            ax.set_theta_zero_location("N")
+            ax.set_theta_direction(-1)
+            ax.set_xticks(angles)
+            ax.set_xticklabels(lbl, fontsize=9)
+            ax.tick_params(axis="y", labelsize=8)
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.1f}%"))
+            ax.set_title(f"{season_name} Wind Rose", fontsize=14, pad=20,
+                         color="#2c3e50", fontweight="bold")
+            ax.annotate(f"Calm\n{calm_pct_s:.1f}%", xy=(0, 0), xycoords="data",
+                        ha="center", va="center", fontsize=10, color="#555555")
+            ax.legend(loc="lower left", bbox_to_anchor=(1.05, 0.0),
+                      fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
+            plt.tight_layout()
+            path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            plt.close(fig2)
+            return path
+
         _wind_rose_slide()
+
+        # ── Seasonal Wind Rose Slides (one slide per season) ────────────────
+        for _sname, _smonths in [("Winter", [12, 1, 2]), ("Spring", [3, 4, 5]),
+                                  ("Summer", [6, 7, 8]),  ("Fall",   [9, 10, 11])]:
+            _sdf = wdf[wdf["month"].isin(_smonths)].copy()
+            if _sdf.empty:
+                continue
+            _srose, _scalm = compute_wind_rose(_sdf, n_sectors=n_sectors, exclude_calm=False)
+            _sslide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(_sslide, f"Wind Rose – {_sname}")
+            _add_divider(_sslide, 0.62)
+            try:
+                _spath = _mpl_single_season_rose_png(_srose, _scalm, _sname)
+                _cw = 7.5
+                _sslide.shapes.add_picture(_spath, Inches((SW - _cw) / 2), Inches(0.80),
+                                           width=Inches(_cw))
+                os.unlink(_spath)
+            except Exception as _se:
+                _err_box(_sslide, _se)
+            _add_logo(_sslide)
 
         # ── Wind Speed Heatmap Slide ────────────────────────────────────────
         def _speed_heatmap_slide():
             slide = prs.slides.add_slide(BLANK_LAYOUT)
-            _add_slide_title(slide, "Wind Speed Heatmap (Day × Hour)")
+            _add_slide_title(slide, "Wind Speed Heatmap (Month × Hour)")
             _add_divider(slide, 0.62)
 
             try:
-                fig = plot_speed_heatmap(wdf)
-                
-                try:
-                    import plotly.io as pio
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                    tmp.close()
-                    pio.write_image(fig, tmp.name, width=1200, height=600)
-                    
-                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                             width=Inches(SW - 0.54), height=Inches(5.9))
-                    os.unlink(tmp.name)
-                except Exception as pe:
-                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+                img_path = _mpl_speed_heatmap_png()
+                slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(img_path)
             except Exception as e:
                 _err_box(slide, e)
 
@@ -1276,23 +1483,14 @@ def generate_combined_pptx_report(
         # ── Wind Direction Heatmap Slide ────────────────────────────────────
         def _direction_heatmap_slide():
             slide = prs.slides.add_slide(BLANK_LAYOUT)
-            _add_slide_title(slide, "Wind Direction Heatmap (Day × Hour)")
+            _add_slide_title(slide, "Wind Direction Heatmap (Month × Hour)")
             _add_divider(slide, 0.62)
 
             try:
-                fig = plot_direction_heatmap(wdf)
-                
-                try:
-                    import plotly.io as pio
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                    tmp.close()
-                    pio.write_image(fig, tmp.name, width=1200, height=600)
-                    
-                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                             width=Inches(SW - 0.54), height=Inches(5.9))
-                    os.unlink(tmp.name)
-                except Exception as pe:
-                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+                img_path = _mpl_direction_heatmap_png()
+                slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(img_path)
             except Exception as e:
                 _err_box(slide, e)
 
@@ -1307,19 +1505,10 @@ def generate_combined_pptx_report(
             _add_divider(slide, 0.62)
 
             try:
-                fig = plot_speed_histogram(wdf)
-                
-                try:
-                    import plotly.io as pio
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                    tmp.close()
-                    pio.write_image(fig, tmp.name, width=1200, height=500)
-                    
-                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                             width=Inches(SW - 0.54), height=Inches(5.9))
-                    os.unlink(tmp.name)
-                except Exception as pe:
-                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+                img_path = _mpl_speed_histogram_png()
+                slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(img_path)
             except Exception as e:
                 _err_box(slide, e)
 
@@ -1334,19 +1523,10 @@ def generate_combined_pptx_report(
             _add_divider(slide, 0.62)
 
             try:
-                fig = plot_climate_bubble(wdf)
-                
-                try:
-                    import plotly.io as pio
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                    tmp.close()
-                    pio.write_image(fig, tmp.name, width=1200, height=650)
-                    
-                    slide.shapes.add_picture(tmp.name, Inches(0.27), Inches(0.72),
-                                             width=Inches(SW - 0.54), height=Inches(5.9))
-                    os.unlink(tmp.name)
-                except Exception as pe:
-                    _err_box(slide, f"Plotly conversion: {str(pe)[:30]}")
+                img_path = _mpl_climate_bubble_png()
+                slide.shapes.add_picture(img_path, Inches(0.27), Inches(0.72),
+                                         width=Inches(SW - 0.54), height=Inches(5.9))
+                os.unlink(img_path)
             except Exception as e:
                 _err_box(slide, e)
 
@@ -1732,6 +1912,307 @@ def generate_combined_pptx_report(
         _design_recommendations_slide()
 
     _prepare_thermal_comfort_slides()
+
+    # ── SECTION 10 – RAINFALL ANALYSIS SLIDES (optional) ──────────────────────
+    def _prepare_rainfall_slides():
+        """Add rainfall analysis section if station/year are provided."""
+        if not rainfall_station_name or not rainfall_station_id or not rainfall_year:
+            return
+
+        try:
+            from modules.rainfall_module import _fetch_noaa, _fetch_percentile_depth, _RUNOFF_SURFACES
+        except ImportError:
+            return
+
+        import matplotlib.patches as mpatches
+
+        try:
+            df_rain = _fetch_noaa(rainfall_station_id, rainfall_year)
+            if df_rain.empty:
+                return
+        except Exception:
+            return
+
+        _sa  = rainfall_surface_areas or {"roof": 0.0, "paved": 0.0, "green": 0.0, "water": 0.0}
+        df_f = df_rain[
+            (df_rain["month"] >= rainfall_start_month) &
+            (df_rain["month"] <= rainfall_end_month)
+        ].copy()
+
+        ML = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        xm = np.arange(12)
+
+        CHART_TOP = 0.72
+        CHART_H   = 4.48
+        KPI_TOP   = 5.33
+        KPI_H     = 0.85
+
+        def _hex_rgb(h):
+            return RGBColor(int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
+
+        def _fmt_L(litres, unit="L"):
+            if litres >= 1_000_000:
+                return f"{litres / 1_000_000:.2f}M {unit}"
+            if litres >= 10_000:
+                return f"{litres / 1_000:.1f}K {unit}"
+            return f"{litres:,.0f} {unit}"
+
+        def _kpi_card(slide, left, top, width, height, label, value, sub, hex_color):
+            rect = slide.shapes.add_shape(1, Inches(left), Inches(top), Inches(width), Inches(height))
+            rect.fill.solid()
+            rect.fill.fore_color.rgb = _hex_rgb(hex_color)
+            rect.line.fill.background()
+            label_clr = RGBColor(0xCC, 0xDD, 0xFF)
+            sub_clr   = RGBColor(0xD4, 0xE8, 0xFF)
+            for (tx, ty, tw, th, txt, fsize, bold, clr, wrap) in [
+                (left + 0.07, top + 0.06, width - 0.14, 0.20, label, Pt(9), False, label_clr, True),
+            ]:
+                tb = slide.shapes.add_textbox(Inches(tx), Inches(ty), Inches(tw), Inches(th))
+                tf = tb.text_frame
+                tf.word_wrap = wrap
+                p = tf.paragraphs[0]
+                p.alignment = PP_ALIGN.CENTER
+                r = p.add_run()
+                r.text = txt
+                r.font.size = fsize
+                r.font.bold = bold
+                r.font.color.rgb = clr
+            val_top = top + (height - 0.28) / 2 - 0.05
+            tb_v = slide.shapes.add_textbox(Inches(left + 0.05), Inches(val_top), Inches(width - 0.10), Inches(0.50))
+            tf_v = tb_v.text_frame
+            tf_v.word_wrap = False
+            p_v = tf_v.paragraphs[0]
+            p_v.alignment = PP_ALIGN.CENTER
+            r_v = p_v.add_run()
+            r_v.text = value
+            r_v.font.size = Pt(26) if height >= 0.80 else Pt(22)
+            r_v.font.bold = True
+            r_v.font.color.rgb = WHITE
+            tb_s = slide.shapes.add_textbox(Inches(left + 0.07), Inches(top + height - 0.22), Inches(width - 0.14), Inches(0.20))
+            p_s = tb_s.text_frame.paragraphs[0]
+            p_s.alignment = PP_ALIGN.CENTER
+            r_s = p_s.add_run()
+            r_s.text = sub
+            r_s.font.size = Pt(8)
+            r_s.font.color.rgb = sub_clr
+
+        def _kpi_row(slide, cards, top, card_h=0.85):
+            n = len(cards)
+            gap = 0.12
+            card_w = (SW - 0.54 - gap * (n - 1)) / n
+            left = 0.27
+            for lbl, val, sub, clr in cards:
+                _kpi_card(slide, left, top, card_w, card_h, lbl, val, sub, clr)
+                left += card_w + gap
+
+        def _intensity_color(mm):
+            if mm < 50:    return "#93c5fd"
+            elif mm < 150: return "#3b82f6"
+            elif mm < 300: return "#1d4ed8"
+            else:          return "#1e3a5f"
+
+        # Section header
+        def _section_header():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            bg = slide.shapes.add_shape(1, Inches(0), Inches(2.5), Inches(SW), Inches(2.5))
+            bg.fill.solid()
+            bg.fill.fore_color.rgb = TITLE_RED
+            bg.line.fill.background()
+            tb = slide.shapes.add_textbox(Inches(0.6), Inches(2.7), Inches(SW - 1.2), Inches(1.1))
+            run = tb.text_frame.paragraphs[0].add_run()
+            run.text = "Rainfall Analysis"
+            run.font.size = Pt(40)
+            run.font.bold = True
+            run.font.color.rgb = WHITE
+            tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.85), Inches(SW - 1.2), Inches(0.6))
+            run2 = tb2.text_frame.paragraphs[0].add_run()
+            run2.text = f"{rainfall_station_name}  |  {rainfall_year}"
+            run2.font.size = Pt(18)
+            run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
+            _add_logo(slide)
+
+        _section_header()
+
+        # Monthly Rainfall
+        def _monthly_rainfall():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, f"Monthly Rainfall  —  {rainfall_station_name}, {rainfall_year}")
+            _add_divider(slide, 0.62)
+            try:
+                monthly      = df_f.groupby("month")["prcp_mm"].sum().reindex(range(1, 13), fill_value=0)
+                annual_total = float(monthly.sum())
+                annual_mean  = annual_total / 12
+                wettest_idx  = int(monthly.idxmax())
+                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+                ax.bar(xm, monthly.values, color=[_intensity_color(v) for v in monthly.values], edgecolor="none")
+                ax.axhline(annual_mean, color="#ef4444", linewidth=1.4, linestyle="--")
+                ax.text(10.6, annual_mean * 1.02, f"Mean: {annual_mean:.0f} mm", ha="right", va="bottom", fontsize=8, color="#ef4444")
+                ax.set_xticks(xm); ax.set_xticklabels(ML, fontsize=10)
+                ax.set_ylabel("Rainfall (mm)", fontsize=11, fontweight="bold")
+                ax.set_title(f"Monthly Rainfall Totals – {rainfall_year}", fontsize=13, fontweight="bold", pad=10, color="#333")
+                ax.legend(handles=[
+                    mpatches.Patch(color="#93c5fd", label="< 50 mm"),
+                    mpatches.Patch(color="#3b82f6", label="50–150 mm"),
+                    mpatches.Patch(color="#1d4ed8", label="150–300 mm"),
+                    mpatches.Patch(color="#1e3a5f", label="≥ 300 mm"),
+                ], loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=4, frameon=True, fontsize=9)
+                ax.grid(True, alpha=0.25, linestyle="--", axis="y")
+                ax.set_facecolor("#fafafa"); fig.patch.set_facecolor("white"); plt.tight_layout()
+                tmp = _save_mpl_figure(fig); plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(CHART_TOP), width=Inches(SW - 0.54), height=Inches(CHART_H))
+                os.unlink(tmp)
+                _kpi_row(slide, [
+                    ("Annual Total",  f"{annual_total:.0f} mm",          "Full year",              "#1d4ed8"),
+                    ("Wettest Month", ML[wettest_idx - 1],                f"{monthly[wettest_idx]:.0f} mm", "#1e3a5f"),
+                    ("Mean Monthly",  f"{annual_mean:.0f} mm",           "Annual ÷ 12",            "#0891b2"),
+                ], top=KPI_TOP, card_h=KPI_H)
+            except Exception as e:
+                _err_box(slide, e)
+            _add_logo(slide)
+
+        _monthly_rainfall()
+
+        # Rainy Days
+        def _rainy_days():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, f"Rainy Days by Intensity  —  {rainfall_station_name}, {rainfall_year}")
+            _add_divider(slide, 0.62)
+            try:
+                rainy = df_f[df_f["prcp_mm"] > 0].copy()
+                def _cnt(lo, hi=None):
+                    m = rainy["prcp_mm"] >= lo
+                    if hi is not None:
+                        m &= rainy["prcp_mm"] < hi
+                    return rainy[m].groupby("month").size().reindex(range(1, 13), fill_value=0)
+                light    = _cnt(0.001, 10)
+                moderate = _cnt(10, 25)
+                heavy    = _cnt(25, rainfall_heavy_threshold)
+                extreme  = _cnt(rainfall_heavy_threshold)
+                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+                ax.bar(xm, light.values, color="#bfdbfe", label="Light (< 10 mm)")
+                ax.bar(xm, moderate.values, bottom=light.values, color="#3b82f6", label="Moderate (10–25 mm)")
+                ax.bar(xm, heavy.values, bottom=(light + moderate).values, color="#1d4ed8", label=f"Heavy (25–{rainfall_heavy_threshold:.0f} mm)")
+                ax.bar(xm, extreme.values, bottom=(light + moderate + heavy).values, color="#ef4444", label=f"Extreme (≥ {rainfall_heavy_threshold:.0f} mm)")
+                ax.set_xticks(xm); ax.set_xticklabels(ML, fontsize=10)
+                ax.set_ylabel("Number of Days", fontsize=11, fontweight="bold")
+                ax.set_title(f"Rainy Days per Month by Intensity – {rainfall_year}", fontsize=13, fontweight="bold", pad=10, color="#333")
+                ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=4, frameon=True, fontsize=9)
+                ax.grid(True, alpha=0.25, linestyle="--", axis="y")
+                ax.set_facecolor("#fafafa"); fig.patch.set_facecolor("white"); plt.tight_layout()
+                tmp = _save_mpl_figure(fig); plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(CHART_TOP), width=Inches(SW - 0.54), height=Inches(CHART_H))
+                os.unlink(tmp)
+                _kpi_row(slide, [
+                    ("Total Rainy Days",                       str(int(rainy.shape[0])),   "Days with rain > 0",              "#1d4ed8"),
+                    ("Light < 10 mm",                          str(int(light.sum())),       "Days",                            "#0891b2"),
+                    ("Moderate 10–25",                         str(int(moderate.sum())),    "Days",                            "#2563eb"),
+                    (f"Heavy 25–{rainfall_heavy_threshold:.0f}mm", str(int(heavy.sum())),   "Days",                            "#1e3a5f"),
+                    (f"Extreme ≥{rainfall_heavy_threshold:.0f}mm", str(int(extreme.sum())), "Days",                            "#dc2626"),
+                ], top=KPI_TOP, card_h=KPI_H)
+            except Exception as e:
+                _err_box(slide, e)
+            _add_logo(slide)
+
+        _rainy_days()
+
+        # GI Balance
+        def _gi_balance():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, f"Rainwater Harvesting Potential  —  {rainfall_station_name}, {rainfall_year}")
+            _add_divider(slide, 0.62)
+            try:
+                gi_result = _fetch_percentile_depth(rainfall_station_id, rainfall_gi_percentile, rainfall_gi_start_year)
+                if "error" in gi_result:
+                    _err_box(slide, f"Baseline fetch failed: {gi_result['error']}")
+                    _add_logo(slide)
+                    return
+                baseline_mm = gi_result["raw_mm"]
+                daily = df_rain.sort_values("date").copy()
+                daily["stored"]   = daily["prcp_mm"].clip(upper=baseline_mm)
+                daily["overflow"] = (daily["prcp_mm"] - baseline_mm).clip(lower=0)
+                mgrp = daily.groupby("month").agg(stored=("stored", "sum"), overflow=("overflow", "sum")).reindex(range(1, 13), fill_value=0)
+                total_recharge = float(daily["stored"].sum())
+                total_overflow = float(daily["overflow"].sum())
+                overflow_days  = int((daily["overflow"] > 0).sum())
+                worst_m_idx    = int(mgrp["overflow"].idxmax()) if total_overflow > 0 else 1
+                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+                ax.bar(xm, mgrp["stored"].values, color="#22c55e", label="Stored (L/m²)")
+                ax.bar(xm, -mgrp["overflow"].values, color="#ef4444", label="Overflow (L/m²)")
+                ax.axhline(0, color="#374151", linewidth=1.2, linestyle="--")
+                ax.set_xticks(xm); ax.set_xticklabels(ML, fontsize=10)
+                ax.set_ylabel("Volume (L/m²)", fontsize=11, fontweight="bold")
+                ax.set_title(
+                    f"Monthly Rainwater Harvesting Potential – {rainfall_year}  "
+                    f"({rainfall_gi_percentile}th-percentile baseline: {baseline_mm:.1f} mm/day)",
+                    fontsize=12, fontweight="bold", pad=10, color="#333",
+                )
+                ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=2, frameon=True, fontsize=9)
+                ax.grid(True, alpha=0.25, linestyle="--", axis="y")
+                ax.set_facecolor("#fafafa"); fig.patch.set_facecolor("white"); plt.tight_layout()
+                tmp = _save_mpl_figure(fig); plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(CHART_TOP), width=Inches(SW - 0.54), height=Inches(CHART_H))
+                os.unlink(tmp)
+                worst_val = float(mgrp.loc[worst_m_idx, "overflow"])
+                _kpi_row(slide, [
+                    ("Storage Potential",    f"{total_recharge:,.0f} L/m²", "Total captured by GI",       "#16a34a"),
+                    ("Recharge Potential",   f"{total_overflow:,.0f} L/m²", "Excess beyond GI capacity",   "#dc2626"),
+                    ("Overflow Days",        str(overflow_days),             f"Rain > {baseline_mm:.0f} mm","#d97706"),
+                    ("Worst Overflow Month", ML[worst_m_idx - 1],           f"{worst_val:,.0f} L/m²",      "#7c3aed"),
+                ], top=KPI_TOP, card_h=KPI_H)
+            except Exception as e:
+                _err_box(slide, e)
+            _add_logo(slide)
+
+        _gi_balance()
+
+        # Surface Runoff
+        def _surface_runoff():
+            CHART_H2 = 3.70
+            ROW1_TOP = CHART_TOP + CHART_H2 + 0.13
+            ROW2_TOP = ROW1_TOP + 0.92 + 0.10
+            ROW_H    = 0.88
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, f"Surface Runoff Analysis  —  {rainfall_station_name}, {rainfall_year}")
+            _add_divider(slide, 0.62)
+            try:
+                monthly_prcp = df_f.groupby("month")["prcp_mm"].sum().reindex(range(1, 13), fill_value=0)
+                monthly_vols = {s["key"]: (monthly_prcp / 1000.0) * _sa.get(s["key"], 0.0) * s["rc"] for s in _RUNOFF_SURFACES}
+                fig, ax = plt.subplots(figsize=(13, 4.0), dpi=130)
+                bottom = np.zeros(12)
+                for surf in _RUNOFF_SURFACES:
+                    vals = monthly_vols[surf["key"]].values
+                    ax.bar(xm, vals, bottom=bottom, color=surf["color"], label=f"{surf['label']}  (RC {surf['rc']:.2f})")
+                    bottom += vals
+                ax.set_xticks(xm); ax.set_xticklabels(ML, fontsize=10)
+                ax.set_ylabel("Runoff Volume (m³)", fontsize=11, fontweight="bold")
+                ax.set_title(f"Monthly Surface Runoff by Type – {rainfall_year}", fontsize=13, fontweight="bold", pad=10, color="#333")
+                ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, frameon=True, fontsize=8)
+                ax.grid(True, alpha=0.25, linestyle="--", axis="y")
+                ax.set_facecolor("#fafafa"); fig.patch.set_facecolor("white"); plt.tight_layout()
+                tmp = _save_mpl_figure(fig); plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(CHART_TOP), width=Inches(SW - 0.54), height=Inches(CHART_H2))
+                os.unlink(tmp)
+                surf_df      = pd.DataFrame({s["key"]: monthly_vols[s["key"]] for s in _RUNOFF_SURFACES})
+                total_m      = surf_df.sum(axis=1)
+                total_annual = float(total_m.sum())
+                peak_m       = int(total_m.idxmax()) if total_annual > 0 else 1
+                _kpi_row(slide, [
+                    ("Total Annual Runoff", _fmt_L(total_annual * 1000), "All surfaces combined",           "#1d4ed8"),
+                    ("Peak Runoff Month",   ML[peak_m - 1],              _fmt_L(float(total_m[peak_m]) * 1000), "#dc2626"),
+                ], top=ROW1_TOP, card_h=ROW_H)
+                short = ["Roof", "Paved", "Green Area", "Waterbody"]
+                _kpi_row(slide, [
+                    (f"{short[i]}  RC {s['rc']:.2f}", _fmt_L(float(monthly_vols[s["key"]].sum()) * 1000), "Annual runoff", s["color"])
+                    for i, s in enumerate(_RUNOFF_SURFACES)
+                ], top=ROW2_TOP, card_h=ROW_H)
+            except Exception as e:
+                _err_box(slide, e)
+            _add_logo(slide)
+
+        _surface_runoff()
+
+    _prepare_rainfall_slides()
 
     # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
     def _make_annexure_slide():
