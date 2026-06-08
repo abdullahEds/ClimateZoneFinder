@@ -23,6 +23,8 @@ sys.path.insert(0, modules_dir)
 from pages.modules.ppt_report import generate_pptx_report, generate_shading_pptx_report, generate_wind_pptx_report
 from pages.modules.thermal_comfort_ppt import generate_thermal_comfort_pptx_report
 from pages.modules.combined_report import generate_combined_pptx_report
+from pages.modules.rainfall_ppt import generate_rainfall_pptx_report
+from pages.modules.rainfall_module import STATIONS as RAINFALL_STATIONS
 
 app = FastAPI(
     title="Climate Zone Finder - PPT Report API",
@@ -458,6 +460,126 @@ async def generate_thermal_comfort_report(
         raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
 
 
+@app.get("/api/rainfall/stations")
+def list_rainfall_stations():
+    """Return all available NOAA weather stations for rainfall analysis."""
+    return {"stations": list(RAINFALL_STATIONS.keys())}
+
+
+@app.post("/api/reports/rainfall-analysis")
+async def generate_rainfall_report(
+    # ── Station & period ─────────────────────────────────────────────────────
+    station_name: str = Form(..., description=(
+        "Station name — must match one of the available stations. "
+        "Call GET /api/rainfall/stations for the full list. "
+        "Example: 'New Delhi (Safdarjung)'"
+    )),
+    year: int = Form(..., description="Data year, e.g. 2023"),
+    start_month: int = Form(1,  ge=1, le=12, description="Start month 1–12 (default: 1 = January)"),
+    end_month:   int = Form(12, ge=1, le=12, description="End month 1–12 (default: 12 = December)"),
+
+    # ── Rainfall classification ───────────────────────────────────────────────
+    heavy_rain_threshold: float = Form(50.0, description=(
+        "Daily rainfall ≥ this value (mm/day) is classified as Heavy rain. "
+        "Days above 2× this value are classified as Extreme. Default: 50 mm/day"
+    )),
+
+    # ── Surface runoff areas ──────────────────────────────────────────────────
+    roof_area_m2:   float = Form(0.0, ge=0, description="Roof area — Terrace + Service (m²). RC = 0.90"),
+    paved_area_m2:  float = Form(0.0, ge=0, description="Total paved area — Roads, Pathways, Hardscape (m²). RC = 0.90"),
+    green_area_m2:  float = Form(0.0, ge=0, description="Total landscape/green area — Trees, Shrubs, Groundcover (m²). RC = 0.10"),
+    water_area_m2:  float = Form(0.0, ge=0, description="Waterbody area (m²). RC = 0.90"),
+
+    # ── Green Infrastructure balance ─────────────────────────────────────────
+    gi_percentile:  int = Form(95, ge=50, le=99, description=(
+        "Percentile of historical rainy-day depths used as the GI retention baseline. "
+        "E.g. 95 means GI can capture rain up to the 95th-percentile storm depth. Default: 95"
+    )),
+    gi_start_year:  int = Form(1990, ge=1950, le=2023, description=(
+        "Earliest year of historical NOAA data used to calculate the percentile baseline. "
+        "Default: 1990"
+    )),
+):
+    """
+    Generate a Rainfall Analysis PowerPoint report using live NOAA daily-summaries data.
+
+    **No file upload required** — data is fetched automatically from NOAA NCEI for the
+    selected station and year.
+
+    ### Slides generated
+    1. **Cover** — station name, year, analysis period
+    2. **Monthly Rainfall** — bar chart + KPIs (Annual total, Wettest month, Mean monthly)
+    3. **Rainy Days Classification** — stacked bar chart + KPIs (Total, Light, Moderate, Heavy, Extreme)
+    4. **Surface Runoff by Type** — stacked bar chart per surface + KPIs (Total annual, Peak month, per-surface breakdown)
+    5. **Green Infrastructure Balance** — stored vs overflow bar chart + KPIs (Annual recharge, Annual overflow, Overflow days, Worst month)
+
+    ### Rain intensity thresholds (mm/day)
+    | Class    | Rule                                        |
+    |----------|---------------------------------------------|
+    | Light    | 0.1 – 10                                    |
+    | Moderate | 10 – `heavy_rain_threshold`                 |
+    | Heavy    | `heavy_rain_threshold` – 2× threshold       |
+    | Extreme  | ≥ 2× `heavy_rain_threshold`                 |
+
+    ### Runoff coefficients (RC) — fixed per surface type
+    | Surface     | RC   |
+    |-------------|------|
+    | Roof        | 0.90 |
+    | Paved       | 0.90 |
+    | Green/Lawn  | 0.10 |
+    | Waterbody   | 0.90 |
+    """
+    # Validate station
+    if station_name not in RAINFALL_STATIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown station '{station_name}'. "
+                f"Valid options: {list(RAINFALL_STATIONS.keys())}"
+            ),
+        )
+
+    if start_month > end_month:
+        raise HTTPException(
+            status_code=400,
+            detail=f"start_month ({start_month}) must be ≤ end_month ({end_month}).",
+        )
+
+    station_id = RAINFALL_STATIONS[station_name]
+    surface_areas = {
+        "roof":  roof_area_m2,
+        "paved": paved_area_m2,
+        "green": green_area_m2,
+        "water": water_area_m2,
+    }
+
+    try:
+        pptx_buffer = generate_rainfall_pptx_report(
+            station_name         = station_name,
+            station_id           = station_id,
+            year                 = year,
+            start_month          = start_month,
+            end_month            = end_month,
+            heavy_rain_threshold = heavy_rain_threshold,
+            surface_areas        = surface_areas,
+            gi_percentile        = gi_percentile,
+            gi_start_year        = gi_start_year,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+
+    safe_station = station_name.replace(" ", "_").replace("(", "").replace(")", "").replace("\\", "_")
+    filename = f"Rainfall_Analysis_{safe_station}_{year}.pptx"
+
+    return StreamingResponse(
+        iter([pptx_buffer.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @app.get("/api/docs")
 def api_documentation():
     """API documentation."""
@@ -524,13 +646,53 @@ def api_documentation():
                     "rad_threshold": "Radiation threshold in W/m² (default: 315.0)",
                     "design_cutoff_angle": "Design cutoff angle in degrees (default: 45.0)"
                 }
+            },
+            "rainfall_stations": {
+                "method": "GET",
+                "path": "/api/rainfall/stations",
+                "description": "List all available NOAA weather stations for rainfall analysis"
+            },
+            "rainfall_analysis_report": {
+                "method": "POST",
+                "path": "/api/reports/rainfall-analysis",
+                "description": "Generate Rainfall Analysis PowerPoint report using live NOAA data (no file upload required)",
+                "parameters": {
+                    "station_name": "Station name string — call GET /api/rainfall/stations for valid values (required)",
+                    "year": "Data year, e.g. 2023 (required)",
+                    "start_month": "Start month 1–12 (default: 1)",
+                    "end_month": "End month 1–12 (default: 12)",
+                    "heavy_rain_threshold": "Daily mm/day threshold for Heavy rain class (default: 50.0). Extreme = 2× this value",
+                    "roof_area_m2": "Roof area in m² — Terrace + Service, RC=0.90 (default: 0)",
+                    "paved_area_m2": "Paved area in m² — Roads, Pathways, Hardscape, RC=0.90 (default: 0)",
+                    "green_area_m2": "Green/landscape area in m² — Trees, Shrubs, Groundcover, RC=0.10 (default: 0)",
+                    "water_area_m2": "Waterbody area in m², RC=0.90 (default: 0)",
+                    "gi_percentile": "Percentile of historical rain-day depths used as GI retention baseline (default: 95)",
+                    "gi_start_year": "Earliest year of historical data for percentile calculation (default: 1990)"
+                }
             }
         },
         "examples": {
             "climate_analysis": "curl -X POST 'http://localhost:8001/api/reports/climate-analysis' -F 'file=@weather.epw' -o report.pptx",
             "shading_analysis": "curl -X POST 'http://localhost:8001/api/reports/shading-analysis' -F 'file=@weather.epw' -o shading_report.pptx",
             "combined_analysis_default": "curl -X POST 'http://localhost:8001/api/reports/combined-analysis' -F 'file=@weather.epw' -o combined_report.pptx",
-            "combined_analysis_custom": "curl -X POST 'http://localhost:8001/api/reports/combined-analysis' -F 'file=@weather.epw' -G -d 'temp_threshold=26' -d 'rad_threshold=300' -d 'design_cutoff_angle=50' -o combined_report.pptx"
+            "combined_analysis_custom": "curl -X POST 'http://localhost:8001/api/reports/combined-analysis' -F 'file=@weather.epw' -G -d 'temp_threshold=26' -d 'rad_threshold=300' -d 'design_cutoff_angle=50' -o combined_report.pptx",
+            "rainfall_stations": "curl 'http://localhost:8001/api/rainfall/stations'",
+            "rainfall_analysis_minimal": "curl -X POST 'http://localhost:8001/api/reports/rainfall-analysis' -F 'station_name=New Delhi (Safdarjung)' -F 'year=2023' -o rainfall_report.pptx",
+            "rainfall_analysis_full": (
+                "curl -X POST 'http://localhost:8001/api/reports/rainfall-analysis'"
+                " -F 'station_name=New Delhi (Safdarjung)'"
+                " -F 'year=2023'"
+                " -F 'start_month=6'"
+                " -F 'end_month=9'"
+                " -F 'heavy_rain_threshold=50'"
+                " -F 'roof_area_m2=1200'"
+                " -F 'paved_area_m2=3000'"
+                " -F 'green_area_m2=5000'"
+                " -F 'water_area_m2=800'"
+                " -F 'gi_percentile=95'"
+                " -F 'gi_start_year=1990'"
+                " -o rainfall_report.pptx"
+            )
         }
     }
 
