@@ -32,7 +32,7 @@ from modules.ppt_report import generate_pptx_report, generate_shading_pptx_repor
 from modules.combined_report import generate_combined_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
-from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module
+from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module, rainfall_module
 
 # ─── Page configuration ───────────────────────────────────────────────────────
 
@@ -291,29 +291,34 @@ with col_left:
     st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
-        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort"],
+        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort", "Rainfall"],
         label_visibility="collapsed",
         key="parameter_selector",
         width=300,
     )
 
-if uploaded is None:
+if uploaded is None and selected_parameter != "Rainfall":
     with col_left:
         st.info("Please upload an .epw file to analyze.", width=300)
     st.stop()
 
 # ─── Read raw bytes once (used as cache key) ─────────────────────────────────
 
-raw_epw = uploaded.getvalue().decode("utf-8", errors="replace")
+if uploaded is not None:
+    raw_epw = uploaded.getvalue().decode("utf-8", errors="replace")
 
-# ─── Parse EPW using cache ────────────────────────────────────────────────────
+    # ─── Parse EPW using cache ────────────────────────────────────────────────
 
-try:
-    df, metadata = cached_df_with_derived(raw_epw)
-except Exception as e:
-    with col_left:
-        st.error(f"❌ Failed to parse EPW: {e}")
-    st.stop()
+    try:
+        df, metadata = cached_df_with_derived(raw_epw)
+    except Exception as e:
+        with col_left:
+            st.error(f"❌ Failed to parse EPW: {e}")
+        st.stop()
+else:
+    raw_epw  = None
+    df       = None
+    metadata = {}
 
 # ─── Left-panel controls ──────────────────────────────────────────────────────
 
@@ -404,6 +409,87 @@ with col_left:
             help="Raise upper comfort limit by 1.5°C when wind speed > 1.5 m/s",
         )
 
+    elif selected_parameter == "Rainfall":
+        hour_range = (0, 23)
+
+        st.markdown('<div class="control-section-header">🌧️ Station</div>',
+                    unsafe_allow_html=True)
+        st.selectbox(
+            "Station",
+            options=list(rainfall_module.STATIONS.keys()),
+            key="rainfall_station",
+            label_visibility="collapsed",
+            width=300,
+        )
+
+        st.markdown('<div class="control-section-header">📅 Year</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Year", value=2023, min_value=1950, max_value=2024,
+            step=1, key="rainfall_year",
+            label_visibility="collapsed", width=300,
+        )
+
+        st.markdown('<div class="control-section-header">⚠️ Thresholds</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Heavy rain threshold (mm/day)",
+            value=50.0, step=5.0, min_value=10.0, max_value=200.0,
+            key="rainfall_heavy_threshold",
+            help="Days at or above this are classified as extreme rain events",
+            width=300,
+        )
+
+        st.markdown('<div class="control-section-header">🏠 Building</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Roof area (m²)",
+            value=200.0, step=10.0, min_value=10.0, max_value=50000.0,
+            key="rainfall_roof_area",
+            help="Used to estimate monthly roof runoff volume",
+            width=300,
+        )
+
+        st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>',
+                    unsafe_allow_html=True)
+        try:
+            from modules import rainfall_ppt as _rain_ppt
+            _rain_station = st.session_state.get("rainfall_station", "New Delhi (Safdarjung)")
+            _rain_sid     = rainfall_module.STATIONS[_rain_station]
+            _rain_year    = int(st.session_state.get("rainfall_year", 2023))
+            _rain_s       = st.session_state.get("start_month_idx", 0) + 1
+            _rain_e       = st.session_state.get("end_month_idx", 11) + 1
+            _rain_thresh  = float(st.session_state.get("rainfall_heavy_threshold", 50.0))
+            _rain_areas   = {
+                "roof":  float(st.session_state.get(
+                    "runoff_area_roof",
+                    st.session_state.get("rainfall_roof_area", 200.0))),
+                "paved": float(st.session_state.get("runoff_area_paved", 0.0)),
+                "green": float(st.session_state.get("runoff_area_green", 0.0)),
+                "water": float(st.session_state.get("runoff_area_water", 0.0)),
+            }
+            _rain_bytes = _rain_ppt.generate_rainfall_pptx_report(
+                station_name         = _rain_station,
+                station_id           = _rain_sid,
+                year                 = _rain_year,
+                start_month          = _rain_s,
+                end_month            = _rain_e,
+                heavy_rain_threshold = _rain_thresh,
+                surface_areas        = _rain_areas,
+                gi_percentile        = int(st.session_state.get("balance_percentile", 95)),
+                gi_start_year        = int(st.session_state.get("balance_start_year", 1990)),
+            )
+            st.download_button(
+                label="⬇️ Download Rainfall Report",
+                data=_rain_bytes,
+                file_name=f"Rainfall_Analysis_{_rain_station}_{_rain_year}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                key="download_rainfall_report",
+                width=300,
+            )
+        except Exception as _re:
+            st.error(f"❌ Failed to generate rainfall report: {_re}")
+
     elif selected_parameter == "Ventilation":
         hour_range = (0, 23)
 
@@ -492,52 +578,69 @@ with col_left:
         st.session_state.end_month_idx = end_month
 
     # ── PowerPoint report download ─────────────────────────────────────────────
-    st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
+    if uploaded is not None:
+        st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>', unsafe_allow_html=True)
 
-    try:
-        _year   = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
-        _s_num  = st.session_state.start_month_idx + 1
-        _e_num  = st.session_state.end_month_idx + 1
-        _start_date = pd.to_datetime(f"{_year}-{_s_num}-01").date()
-        _end_date   = (
-            pd.to_datetime(f"{_year}-12-31").date()
-            if _e_num == 12
-            else (pd.to_datetime(f"{_year}-{_e_num+1}-01") - pd.Timedelta(days=1)).date()
-        )
-        _sh, _eh = st.session_state.get("hour_range", (8, 18))
-        
-        # For combined report: use full year and full day by default
-        _full_year_start = pd.to_datetime(f"{_year}-01-01").date()
-        _full_year_end = pd.to_datetime(f"{_year}-12-31").date()
-        _full_day_start_hour = 0
-        _full_day_end_hour = 23
+        try:
+            _year   = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
+            _s_num  = st.session_state.start_month_idx + 1
+            _e_num  = st.session_state.end_month_idx + 1
+            _start_date = pd.to_datetime(f"{_year}-{_s_num}-01").date()
+            _end_date   = (
+                pd.to_datetime(f"{_year}-12-31").date()
+                if _e_num == 12
+                else (pd.to_datetime(f"{_year}-{_e_num+1}-01") - pd.Timedelta(days=1)).date()
+            )
+            _sh, _eh = st.session_state.get("hour_range", (8, 18))
 
-        # Generate combined report with Climate + Shading + Assumptions
-        # Use full year (Jan 1 - Dec 31) and full day (0-23 hours) by default
-        # Always include thermal comfort analysis
-        report_bytes = generate_combined_pptx_report(
-            df, _full_year_start, _full_year_end, _full_day_start_hour, _full_day_end_hour,
-            selected_parameter, metadata=metadata,
-            temp_threshold=float(st.session_state.get("temp_threshold", 28.0)),
-            rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
-            design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
-            n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
-            include_thermal_comfort=True,
-        )
-        
-        st.download_button(
-            label="⬇️ Download Combined Climate & Shading Report",
-            data=report_bytes,
-            file_name=(
-                f"Climate_Shading_Analysis_Report_"
-                f"{_full_year_start.strftime('%Y%m%d')}_to_{_full_year_end.strftime('%Y%m%d')}.pptx"
-            ),
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            key="download_combined_report",
-            width=300,
-        )
-    except Exception as _e:
-        st.error(f"❌ Failed to generate report: {_e}")
+            _full_year_start     = pd.to_datetime(f"{_year}-01-01").date()
+            _full_year_end       = pd.to_datetime(f"{_year}-12-31").date()
+            _full_day_start_hour = 0
+            _full_day_end_hour   = 23
+
+            # Rainfall params — included only when a station has been selected
+            _rain_stn = st.session_state.get("rainfall_station")
+            _rain_sid = rainfall_module.STATIONS.get(_rain_stn) if _rain_stn else None
+            _rain_yr  = int(st.session_state.get("rainfall_year", 2023)) if _rain_stn else None
+
+            report_bytes = generate_combined_pptx_report(
+                df, _full_year_start, _full_year_end, _full_day_start_hour, _full_day_end_hour,
+                selected_parameter, metadata=metadata,
+                temp_threshold=float(st.session_state.get("temp_threshold", 28.0)),
+                rad_threshold=float(st.session_state.get("rad_threshold", 315.0)),
+                design_cutoff_angle=float(st.session_state.get("design_cutoff_angle", 45.0)),
+                n_sectors=int(st.session_state.get("wind_n_sectors", 16)),
+                include_thermal_comfort=True,
+                rainfall_station_name=_rain_stn,
+                rainfall_station_id=_rain_sid,
+                rainfall_year=_rain_yr,
+                rainfall_start_month=st.session_state.get("start_month_idx", 0) + 1,
+                rainfall_end_month=st.session_state.get("end_month_idx", 11) + 1,
+                rainfall_heavy_threshold=float(st.session_state.get("rainfall_heavy_threshold", 50.0)),
+                rainfall_surface_areas={
+                    "roof":  float(st.session_state.get("runoff_area_roof",
+                                   st.session_state.get("rainfall_roof_area", 200.0))),
+                    "paved": float(st.session_state.get("runoff_area_paved", 0.0)),
+                    "green": float(st.session_state.get("runoff_area_green", 0.0)),
+                    "water": float(st.session_state.get("runoff_area_water", 0.0)),
+                } if _rain_stn else None,
+                rainfall_gi_percentile=int(st.session_state.get("balance_percentile", 95)),
+                rainfall_gi_start_year=int(st.session_state.get("balance_start_year", 1990)),
+            )
+
+            st.download_button(
+                label="⬇️ Download Combined Climate & Shading Report",
+                data=report_bytes,
+                file_name=(
+                    f"Climate_Shading_Analysis_Report_"
+                    f"{_full_year_start.strftime('%Y%m%d')}_to_{_full_year_end.strftime('%Y%m%d')}.pptx"
+                ),
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                key="download_combined_report",
+                width=300,
+            )
+        except Exception as _e:
+            st.error(f"❌ Failed to generate report: {_e}")
 
 # ─── Right panel ──────────────────────────────────────────────────────────────
 
@@ -566,6 +669,20 @@ with col_right:
             air_speed_adjust = bool(st.session_state.get("tc_air_speed_adjust", False)),
             start_hour       = _sh,
             end_hour         = _eh,
+        )
+
+    elif selected_parameter == "Rainfall":
+        rainfall_module.render(
+            station_id  = rainfall_module.STATIONS[st.session_state.get(
+                              "rainfall_station",
+                              "New Delhi (Safdarjung)")],
+            year        = int(st.session_state.get("rainfall_year", 2023)),
+            start_month = st.session_state.start_month_idx + 1,
+            end_month   = st.session_state.end_month_idx + 1,
+            heavy_rain_threshold = float(st.session_state.get(
+                                       "rainfall_heavy_threshold", 50.0)),
+            roof_area_m2 = float(st.session_state.get(
+                                       "rainfall_roof_area", 200.0)),
         )
 
     elif selected_parameter == "Ventilation":
