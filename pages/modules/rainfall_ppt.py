@@ -114,7 +114,7 @@ def generate_rainfall_pptx_report(
 
     def _save_fig(fig) -> str:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            fig.savefig(tmp.name, dpi=130, bbox_inches="tight", facecolor="white")
+            fig.savefig(tmp.name, dpi=100, bbox_inches="tight", facecolor="white")
             return tmp.name
 
     def _err(slide, msg):
@@ -265,7 +265,7 @@ def generate_rainfall_pptx_report(
             annual_mean  = annual_total / 12
             wettest_idx  = int(monthly.idxmax())
 
-            fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 4.5), dpi=100)
             ax.bar(x, monthly.values,
                    color=[_intensity_color(v) for v in monthly.values],
                    edgecolor="none")
@@ -326,7 +326,7 @@ def generate_rainfall_pptx_report(
             heavy    = _cnt(25, heavy_rain_threshold)
             extreme  = _cnt(heavy_rain_threshold)
 
-            fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 4.5), dpi=100)
             ax.bar(x, light.values,    color="#bfdbfe", label="Light (< 10 mm)")
             ax.bar(x, moderate.values, bottom=light.values,
                    color="#3b82f6",  label="Moderate (10–25 mm)")
@@ -389,7 +389,7 @@ def generate_rainfall_pptx_report(
                 a = surface_areas.get(surf["key"], 0.0)
                 monthly_vols[surf["key"]] = (monthly_prcp / 1000.0) * a * surf["rc"]
 
-            fig, ax = plt.subplots(figsize=(13, 4.0), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 4.0), dpi=100)
             bottom = np.zeros(12)
             for surf in _RUNOFF_SURFACES:
                 vals = monthly_vols[surf["key"]].values
@@ -472,7 +472,7 @@ def generate_rainfall_pptx_report(
             overflow_days  = int((daily["overflow"] > 0).sum())
             worst_m_idx    = int(mgrp["overflow"].idxmax()) if total_overflow > 0 else 1
 
-            fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 4.5), dpi=100)
             ax.bar(x,  mgrp["stored"].values,   color="#22c55e", label="Stored (L/m²)")
             ax.bar(x, -mgrp["overflow"].values,  color="#ef4444", label="Overflow (L/m²)")
             ax.axhline(0, color="#374151", linewidth=1.2, linestyle="--")

@@ -1,4 +1,4 @@
-"""PowerPoint report generation for Climate Analytics Dashboard."""
+﻿"""PowerPoint report generation for Climate Analytics Dashboard."""
 
 import io
 import os
@@ -110,7 +110,7 @@ def generate_pptx_report(
 
     def _save_mpl_figure(fig) -> str:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            fig.savefig(tmp.name, dpi=130, bbox_inches='tight', facecolor='white')
+            fig.savefig(tmp.name, dpi=100, bbox_inches='tight', facecolor='white')
             return tmp.name
 
     def _err_box(slide, err):
@@ -129,7 +129,7 @@ def generate_pptx_report(
         (df["hour"].between(start_hour, end_hour))
     ]
 
-    # ── COVER SLIDE ───────────────────────────────────────────────────────────
+    # â”€â”€ COVER SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_cover_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
 
@@ -170,7 +170,7 @@ def generate_pptx_report(
 
     _make_cover_slide()
 
-    # ── SECTION 1 – DRY BULB TEMPERATURE ─────────────────────────────────────
+    # â”€â”€ SECTION 1 â€“ DRY BULB TEMPERATURE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_dbt_trend_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _add_slide_title(slide, "Dry Bulb Temperature")
@@ -192,7 +192,7 @@ def generate_pptx_report(
                 else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
             )
 
-            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=100)
             ax.fill_between(daily_stats["doy"], comfort_line - 3.5, comfort_line + 3.5,
                             alpha=0.18, color='gray', label='ASHRAE 80% Comfort')
             ax.fill_between(daily_stats["doy"], comfort_line - 2.5, comfort_line + 2.5,
@@ -207,7 +207,7 @@ def generate_pptx_report(
             months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
             ax.set_xticks(months_doy)
             ax.set_xticklabels(months_lbl, fontsize=10)
-            ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
+            ax.set_ylabel('Temperature (Â°C)', fontsize=11, fontweight='bold')
             ax.set_title('Annual Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=5, frameon=True, fontsize=9)
             ax.grid(True, alpha=0.25, linestyle='--')
@@ -228,7 +228,7 @@ def generate_pptx_report(
 
     def _make_dbt_monthly_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _add_slide_title(slide, "Dry Bulb Temperature – Monthly Summary")
+        _add_slide_title(slide, "Dry Bulb Temperature â€“ Monthly Summary")
         _add_divider(slide, 0.62)
 
         try:
@@ -241,17 +241,17 @@ def generate_pptx_report(
             months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
             x = np.arange(12)
 
-            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=100)
             bar_w = 0.30
             ax.bar(x - bar_w, monthly["t_min"], bar_w, color='#90CAF9', label='Min Temp')
             ax.bar(x,          monthly["t_avg"], bar_w, color='#C00000', label='Avg Temp', alpha=0.85)
             ax.bar(x + bar_w,  monthly["t_max"], bar_w, color='#EF9A9A', label='Max Temp')
 
-            ax.axhspan(20, 26, alpha=0.10, color='green', label='Comfort Band (20–26°C)')
+            ax.axhspan(20, 26, alpha=0.10, color='green', label='Comfort Band (20â€“26Â°C)')
 
             ax.set_xticks(x)
             ax.set_xticklabels(months_lbl, fontsize=10)
-            ax.set_ylabel('Temperature (°C)', fontsize=11, fontweight='bold')
+            ax.set_ylabel('Temperature (Â°C)', fontsize=11, fontweight='bold')
             ax.set_title('Monthly Dry Bulb Temperature Trend', fontsize=13, fontweight='bold', pad=10, color='#333')
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.09), ncol=4, frameon=True, fontsize=9)
             ax.grid(True, alpha=0.25, linestyle='--', axis='y')
@@ -269,9 +269,9 @@ def generate_pptx_report(
 
             if not filtered_df.empty:
                 stats_txt = (
-                    f"Selected Period   Min: {filtered_df['dry_bulb_temperature'].min():.1f}°C  "
-                    f"Avg: {filtered_df['dry_bulb_temperature'].mean():.1f}°C  "
-                    f"Max: {filtered_df['dry_bulb_temperature'].max():.1f}°C  "
+                    f"Selected Period   Min: {filtered_df['dry_bulb_temperature'].min():.1f}Â°C  "
+                    f"Avg: {filtered_df['dry_bulb_temperature'].mean():.1f}Â°C  "
+                    f"Max: {filtered_df['dry_bulb_temperature'].max():.1f}Â°C  "
                     f" |  Ann. CDD24: {(df['dry_bulb_temperature'] - 24).clip(lower=0).sum():.0f}   "
                     f"HDD18: {(18 - df['dry_bulb_temperature']).clip(lower=0).sum():.0f}"
                 )
@@ -290,7 +290,7 @@ def generate_pptx_report(
 
     _make_dbt_monthly_slide()
 
-    # ── SECTION 2 – RELATIVE HUMIDITY ─────────────────────────────────────────
+    # â”€â”€ SECTION 2 â€“ RELATIVE HUMIDITY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_rh_trend_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _add_slide_title(slide, "Relative Humidity")
@@ -309,10 +309,10 @@ def generate_pptx_report(
                 else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
             )
 
-            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=100)
             ax.axhspan(75, 100, alpha=0.13, color='#FF6B6B', label='Condensation Risk (>75%)')
-            ax.axhspan(60,  75, alpha=0.13, color='#FFA500', label='High RH (60–75%)')
-            ax.axhspan(30,  60, alpha=0.13, color='#4ECDC4', label='Comfortable (30–60%)')
+            ax.axhspan(60,  75, alpha=0.13, color='#FFA500', label='High RH (60â€“75%)')
+            ax.axhspan(30,  60, alpha=0.13, color='#4ECDC4', label='Comfortable (30â€“60%)')
             ax.axhspan( 0,  30, alpha=0.13, color='#FFD93D', label='Low RH (<30%)')
 
             ax.fill_between(daily_stats["doy"], daily_stats["rh_min"], daily_stats["rh_max"],
@@ -347,7 +347,7 @@ def generate_pptx_report(
 
     def _make_rh_monthly_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _add_slide_title(slide, "Relative Humidity – Monthly Summary")
+        _add_slide_title(slide, "Relative Humidity â€“ Monthly Summary")
         _add_divider(slide, 0.62)
 
         try:
@@ -360,13 +360,13 @@ def generate_pptx_report(
             months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
             x = np.arange(12)
 
-            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=100)
             bar_w = 0.30
             ax.bar(x - bar_w, monthly_rh["rh_min"], bar_w, color='#AED6F1', label='Min RH')
             ax.bar(x,          monthly_rh["rh_avg"], bar_w, color='#0066cc', label='Avg RH', alpha=0.85)
             ax.bar(x + bar_w,  monthly_rh["rh_max"], bar_w, color='#5DADE2', label='Max RH')
 
-            ax.axhspan(30, 60, alpha=0.10, color='green', label='Comfortable (30–60%)')
+            ax.axhspan(30, 60, alpha=0.10, color='green', label='Comfortable (30â€“60%)')
             ax.axhline(75, color='#E74C3C', linewidth=1.2, linestyle='--', label='Condensation Threshold (75%)')
 
             ax.set_xticks(x)
@@ -411,7 +411,7 @@ def generate_pptx_report(
 
     _make_rh_monthly_slide()
 
-    # ── SECTION 3 – SUN PATH ──────────────────────────────────────────────────
+    # â”€â”€ SECTION 3 â€“ SUN PATH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_sun_path_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _add_slide_title(slide, "Sun Path Diagram")
@@ -440,14 +440,14 @@ def generate_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor='white')
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=100, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
             ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
-            ax.set_yticklabels(['90°\n(Zenith)', '75°', '60°', '45°', '30°', '15°', '0°\n(Horizon)'],
+            ax.set_yticklabels(['90Â°\n(Zenith)', '75Â°', '60Â°', '45Â°', '30Â°', '15Â°', '0Â°\n(Horizon)'],
                                fontsize=7, color='#555')
             ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
             ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=10, fontweight='bold')
@@ -483,7 +483,7 @@ def generate_pptx_report(
 
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.06), ncol=3,
                       frameon=True, fontsize=8, borderaxespad=0)
-            ax.set_title(f'Sun Path  |  Lat: {lat:.2f}°  Lon: {lon:.2f}°',
+            ax.set_title(f'Sun Path  |  Lat: {lat:.2f}Â°  Lon: {lon:.2f}Â°',
                          fontsize=11, fontweight='bold', color='#333', pad=14)
 
             plt.tight_layout()
@@ -504,7 +504,7 @@ def generate_pptx_report(
 
     _make_sun_path_slide()
 
-    # ── SHADING ANALYSIS SLIDE ────────────────────────────────────────────────
+    # â”€â”€ SHADING ANALYSIS SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _plot_sun_path_shading(lat, lon, tz_str):
         """Generate a sun path diagram with horizontal overhang shading profile."""
         try:
@@ -520,15 +520,15 @@ def generate_pptx_report(
             sol = sol[sol["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
-            # fig = plt.figure(figsize=(8.0, 7.0), dpi=130, facecolor='white')
-            fig = plt.figure(figsize=(7.0, 7.0), dpi=130, facecolor='white')
+            # fig = plt.figure(figsize=(8.0, 7.0), dpi=100, facecolor='white')
+            fig = plt.figure(figsize=(7.0, 7.0), dpi=100, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
             ax.set_theta_zero_location('N')
             ax.set_theta_direction(-1)
             ax.set_aspect('equal', adjustable='box')
             ax.set_ylim(0, 90)
             ax.set_yticks([0, 15, 30, 45, 60, 75, 90])
-            ax.set_yticklabels(['90°', '75°', '60°', '45°', '30°', '15°', '0°'], fontsize=7, color='#555')
+            ax.set_yticklabels(['90Â°', '75Â°', '60Â°', '45Â°', '30Â°', '15Â°', '0Â°'], fontsize=7, color='#555')
             ax.set_xticks(np.radians([0, 45, 90, 135, 180, 225, 270, 315]))
             ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], fontsize=9, fontweight='bold')
             ax.set_facecolor('#F0F4F8')
@@ -572,7 +572,7 @@ def generate_pptx_report(
 
             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.08), ncol=4,
                      frameon=True, fontsize=7, borderaxespad=0)
-            ax.set_title(f'Sun Path with Shading Profile\nLat: {lat:.2f}°  Lon: {lon:.2f}°',
+            ax.set_title(f'Sun Path with Shading Profile\nLat: {lat:.2f}Â°  Lon: {lon:.2f}Â°',
                         fontsize=10, fontweight='bold', color='#333', pad=12)
 
             # plt.tight_layout()
@@ -651,7 +651,7 @@ def generate_pptx_report(
             noon_alt_win = float(swin.iloc[12]["apparent_elevation"])
 
             p = tf.add_paragraph()
-            p.text = f"• Summer Solstice (Jun 21): Solar altitude at noon = {noon_alt_sum:.1f}°"
+            p.text = f"â€¢ Summer Solstice (Jun 21): Solar altitude at noon = {noon_alt_sum:.1f}Â°"
             p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.line_spacing = 1.1
@@ -659,7 +659,7 @@ def generate_pptx_report(
             p.space_after = Pt(3)
 
             p = tf.add_paragraph()
-            p.text = f"• Winter Solstice (Dec 21): Solar altitude at noon = {noon_alt_win:.1f}°"
+            p.text = f"â€¢ Winter Solstice (Dec 21): Solar altitude at noon = {noon_alt_win:.1f}Â°"
             p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.line_spacing = 1.1
@@ -686,7 +686,7 @@ def generate_pptx_report(
                 shading_pct = 0
 
             p = tf.add_paragraph()
-            p.text = f"• Shading required: {shading_hours:.0f} hours ({shading_pct:.1f}% of period)"
+            p.text = f"â€¢ Shading required: {shading_hours:.0f} hours ({shading_pct:.1f}% of period)"
             p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.line_spacing = 1.1
@@ -694,7 +694,7 @@ def generate_pptx_report(
             p.space_after = Pt(6)
         except Exception:
             p = tf.add_paragraph()
-            p.text = "• Solar altitude and shading data not available"
+            p.text = "â€¢ Solar altitude and shading data not available"
             p.font.size = Pt(10)
             p.font.color.rgb = DARK_GREY
             p.space_after = Pt(6)
@@ -708,11 +708,11 @@ def generate_pptx_report(
         p.space_after = Pt(4)
 
         recommendations = [
-            "• South-facing facades: Use horizontal overhangs (louvers) or shading devices to block summer sun while allowing winter sunlight penetration",
-            "• East/West facades: Use vertical fins or combination of overhangs and fins to minimize morning/afternoon heat gain",
-            "• North-facing facades: Minimal shading required; prioritize daylighting and views",
-            "• Use high-performance glazing with low solar heat gain coefficient (SHGC) in high solar radiation areas",
-            "• Consider automated shading systems for dynamic climate response throughout the year",
+            "â€¢ South-facing facades: Use horizontal overhangs (louvers) or shading devices to block summer sun while allowing winter sunlight penetration",
+            "â€¢ East/West facades: Use vertical fins or combination of overhangs and fins to minimize morning/afternoon heat gain",
+            "â€¢ North-facing facades: Minimal shading required; prioritize daylighting and views",
+            "â€¢ Use high-performance glazing with low solar heat gain coefficient (SHGC) in high solar radiation areas",
+            "â€¢ Consider automated shading systems for dynamic climate response throughout the year",
         ]
         for rec in recommendations:
             p = tf.add_paragraph()
@@ -732,9 +732,9 @@ def generate_pptx_report(
         p.space_after = Pt(3)
 
         considerations = [
-            "• Optimal window-to-wall ratio: 30-40% for climate comfort; balance daylighting with thermal performance",
-            "• Depth of shading device: D/H ratio (depth to height) between 0.5-1.0 for effective summer shading",
-            "• Material selection: High-albedo surfaces reflect solar radiation; low-emissivity coatings minimize thermal transmission",
+            "â€¢ Optimal window-to-wall ratio: 30-40% for climate comfort; balance daylighting with thermal performance",
+            "â€¢ Depth of shading device: D/H ratio (depth to height) between 0.5-1.0 for effective summer shading",
+            "â€¢ Material selection: High-albedo surfaces reflect solar radiation; low-emissivity coatings minimize thermal transmission",
         ]
         for cons in considerations:
             p = tf.add_paragraph()
@@ -749,7 +749,7 @@ def generate_pptx_report(
 
     _make_shading_summary_slide()
 
-    # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
+    # â”€â”€ ANNEXURE SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_annexure_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _add_slide_title(slide, "Annexure")
@@ -834,7 +834,7 @@ def generate_pptx_report(
     return report_bytes
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def generate_shading_pptx_report(
@@ -910,14 +910,14 @@ def generate_shading_pptx_report(
 
     def _save_fig(fig) -> str:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            fig.savefig(tmp.name, dpi=130, bbox_inches="tight", facecolor="white")
+            fig.savefig(tmp.name, dpi=100, bbox_inches="tight", facecolor="white")
             return tmp.name
 
     _lat  = lat  if lat  is not None else (metadata.get("latitude")  or 0.0)
     _lon  = lon  if lon  is not None else (metadata.get("longitude") or 0.0)
     _tz   = tz_str or metadata.get("timezone", "UTC")
 
-    # ── COVER ─────────────────────────────────────────────────────────────────
+    # â”€â”€ COVER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _cover():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         bg = slide.shapes.add_shape(1, Inches(0), Inches(2.4), Inches(SW), Inches(2.6))
@@ -952,7 +952,7 @@ def generate_shading_pptx_report(
 
     _cover()
 
-    # ── THERMAL & RADIATION MATRIX ────────────────────────────────────────────
+    # â”€â”€ THERMAL & RADIATION MATRIX â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _thermal_matrix_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Thermal & Radiation Matrix")
@@ -1007,10 +1007,10 @@ def generate_shading_pptx_report(
 
     _thermal_matrix_slide()
 
-    # ── SUN PATH (SHADING MODE) ───────────────────────────────────────────────
+    # â”€â”€ SUN PATH (SHADING MODE) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _sun_path_shading_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Sun Path – Shading Analysis")
+        _slide_title(slide, "Sun Path â€“ Shading Analysis")
         _divider(slide, 0.62)
 
         try:
@@ -1097,7 +1097,7 @@ def generate_shading_pptx_report(
                 (sol["global_horizontal_irradiance"] > rad_threshold)
             )
 
-            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor="white")
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=100, facecolor="white")
             ax = fig.add_subplot(111, projection="polar")
             ax.set_theta_zero_location("N")
             ax.set_theta_direction(-1)
@@ -1136,7 +1136,7 @@ def generate_shading_pptx_report(
 
             shading_pct = mask_sh.sum() / len(mask_sh) * 100 if len(mask_sh) else 0
             ax.set_title(
-                f"Sun Path – Shading Mode   ({shading_pct:.1f}% of daytime hours require shading)",
+                f"Sun Path â€“ Shading Mode   ({shading_pct:.1f}% of daytime hours require shading)",
                 fontsize=10, fontweight="bold", color="#333", pad=14,
             )
             ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.06), ncol=3,
@@ -1160,7 +1160,7 @@ def generate_shading_pptx_report(
 
     _sun_path_shading_slide()
 
-    # ── ORIENTATION SHADING ANALYSIS TABLE ───────────────────────────────────
+    # â”€â”€ ORIENTATION SHADING ANALYSIS TABLE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _orientation_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, f"Orientation Shading Analysis  (Design cutoff: {design_cutoff_angle}\u00b0)")
@@ -1200,11 +1200,11 @@ def generate_shading_pptx_report(
                     c = "#ffebee"
                 row_colors.append([c] * 7)
 
-                dh  = f"{row['D/H (Overhang)']:.3f}" if row["D/H (Overhang)"] is not None else "—"
-                dw  = f"{row['D/W (Fin)']:.3f}"       if row["D/W (Fin)"] is not None else "—"
-                vsa = f"{row['Min VSA (°)']:.1f}\u00b0"  if row["Min VSA (°)"] is not None else "—"
-                hsa = f"{row['Max |HSA| (°)']:.1f}\u00b0" if row["Max |HSA| (°)"] is not None else "—"
-                pct_s = f"{pct:.1f}%" if pct is not None else "—"
+                dh  = f"{row['D/H (Overhang)']:.3f}" if row["D/H (Overhang)"] is not None else "â€”"
+                dw  = f"{row['D/W (Fin)']:.3f}"       if row["D/W (Fin)"] is not None else "â€”"
+                vsa = f"{row['Min VSA (Â°)']:.1f}\u00b0"  if row["Min VSA (Â°)"] is not None else "â€”"
+                hsa = f"{row['Max |HSA| (Â°)']:.1f}\u00b0" if row["Max |HSA| (Â°)"] is not None else "â€”"
+                pct_s = f"{pct:.1f}%" if pct is not None else "â€”"
                 table_data.append([
                     row["Orientation"], str(row["Rays Hitting"]),
                     vsa, hsa, dh, dw, pct_s,
@@ -1244,7 +1244,7 @@ def generate_shading_pptx_report(
 
     _orientation_slide()
 
-    # ── SHADING MASK DIAGRAMS (2×4 grid) ─────────────────────────────────────
+    # â”€â”€ SHADING MASK DIAGRAMS (2Ã—4 grid) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _shading_masks_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Shading Mask Diagrams")
@@ -1346,7 +1346,7 @@ def generate_shading_pptx_report(
 
     _shading_masks_slide()
 
-    # ── ANNEXURE ──────────────────────────────────────────────────────────────
+    # â”€â”€ ANNEXURE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_annexure_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Annexure")
@@ -1499,10 +1499,10 @@ def generate_wind_pptx_report(
 
     def _save_fig(fig) -> str:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            fig.savefig(tmp.name, dpi=130, bbox_inches="tight", facecolor="white")
+            fig.savefig(tmp.name, dpi=100, bbox_inches="tight", facecolor="white")
             return tmp.name
 
-    # ── COVER ─────────────────────────────────────────────────────────────────
+    # â”€â”€ COVER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _cover():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         bg = slide.shapes.add_shape(1, Inches(0), Inches(2.4), Inches(SW), Inches(2.6))
@@ -1575,7 +1575,7 @@ def generate_wind_pptx_report(
     rose_df, calm_pct = compute_wind_rose(wdf, n_sectors=n_sectors, exclude_calm=False)
     stats = compute_wind_statistics(wdf)
 
-    # ── Matplotlib chart helpers (no kaleido / Chrome required) ──────────────
+    # â”€â”€ Matplotlib chart helpers (no kaleido / Chrome required) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _mpl_wind_rose_png():
         sector_width = 360.0 / n_sectors
         if n_sectors == 16:
@@ -1585,7 +1585,7 @@ def generate_wind_pptx_report(
         elif n_sectors == 4:
             lbl = _DIR_4
         else:
-            lbl = [f"{int(i * sector_width)}°" for i in range(n_sectors)]
+            lbl = [f"{int(i * sector_width)}Â°" for i in range(n_sectors)]
         angles = np.array([np.deg2rad(i * sector_width) for i in range(n_sectors)])
         bar_w = np.deg2rad(sector_width) * 0.85
         fig2, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(9, 7))
@@ -1611,7 +1611,7 @@ def generate_wind_pptx_report(
                   fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
         plt.tight_layout()
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
         plt.close(fig2)
         return path
 
@@ -1627,7 +1627,7 @@ def generate_wind_pptx_report(
         im = ax.imshow(pivot.values, aspect="auto", cmap="viridis", interpolation="nearest")
         ax.set_xlabel("Month", fontsize=11)
         ax.set_ylabel("Hour of Day", fontsize=11)
-        ax.set_title("Wind Speed – Month × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+        ax.set_title("Wind Speed â€“ Month Ã— Hour", fontsize=14, color="#2c3e50", fontweight="bold")
         ax.set_xticks(range(12))
         ax.set_xticklabels(month_labels, fontsize=9)
         ax.set_yticks(range(0, 24, 3))
@@ -1635,7 +1635,7 @@ def generate_wind_pptx_report(
         plt.colorbar(im, ax=ax, label="m/s", shrink=0.8)
         plt.tight_layout()
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
         plt.close(fig2)
         return path
 
@@ -1655,18 +1655,18 @@ def generate_wind_pptx_report(
                        vmin=0, vmax=360, interpolation="nearest")
         ax.set_xlabel("Month", fontsize=11)
         ax.set_ylabel("Hour of Day", fontsize=11)
-        ax.set_title("Wind Direction – Month × Hour", fontsize=14, color="#2c3e50", fontweight="bold")
+        ax.set_title("Wind Direction â€“ Month Ã— Hour", fontsize=14, color="#2c3e50", fontweight="bold")
         ax.set_xticks(range(len(month_cols)))
         ax.set_xticklabels(month_labels, fontsize=9)
         ax.set_yticks(range(0, 24, 3))
         ax.set_yticklabels([f"{h:02d}:00" for h in range(0, 24, 3)], fontsize=9)
         cbar = plt.colorbar(im, ax=ax, shrink=0.8)
         cbar.set_ticks([0, 90, 180, 270, 360])
-        cbar.set_ticklabels(["N 0°", "E 90°", "S 180°", "W 270°", "N 360°"])
+        cbar.set_ticklabels(["N 0Â°", "E 90Â°", "S 180Â°", "W 270Â°", "N 360Â°"])
         cbar.set_label("Direction")
         plt.tight_layout()
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
         plt.close(fig2)
         return path
 
@@ -1691,7 +1691,7 @@ def generate_wind_pptx_report(
         ax.spines["right"].set_visible(False)
         plt.tight_layout()
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
         plt.close(fig2)
         return path
 
@@ -1713,20 +1713,20 @@ def generate_wind_pptx_report(
                            s=(mdata["wind_speed"] + 0.3) * scale,
                            c=_MONTH_COLORS[(m - 1) % len(_MONTH_COLORS)],
                            alpha=0.45, linewidths=0, label=_MONTH_NAMES[m - 1])
-            ax.set_xlabel("Dry Bulb Temperature (°C)", fontsize=11)
+            ax.set_xlabel("Dry Bulb Temperature (Â°C)", fontsize=11)
             ax.set_ylabel("Relative Humidity (%)", fontsize=11)
             ax.set_ylim(0, 105)
             ax.legend(title="Month", fontsize=9, title_fontsize=9,
                       loc="center left", bbox_to_anchor=(1, 0.5))
             ax.text(0.01, 0.98, "Bubble size = wind speed (m/s)",
                     transform=ax.transAxes, fontsize=10, color="#888", va="top")
-        ax.set_title("Temperature – Humidity – Wind Speed", fontsize=14,
+        ax.set_title("Temperature â€“ Humidity â€“ Wind Speed", fontsize=14,
                      color="#2c3e50", fontweight="bold")
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         plt.tight_layout()
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
         plt.close(fig2)
         return path
 
@@ -1739,7 +1739,7 @@ def generate_wind_pptx_report(
         elif n_sectors == 4:
             lbl = _DIR_4
         else:
-            lbl = [f"{int(i * sector_width)}°" for i in range(n_sectors)]
+            lbl = [f"{int(i * sector_width)}Â°" for i in range(n_sectors)]
         angles = np.array([np.deg2rad(i * sector_width) for i in range(n_sectors)])
         bar_w = np.deg2rad(sector_width) * 0.85
         fig2, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(9, 7))
@@ -1766,11 +1766,11 @@ def generate_wind_pptx_report(
                   fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
         plt.tight_layout()
         path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-        fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+        fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
         plt.close(fig2)
         return path
 
-    # ── WIND ROSE SLIDE ───────────────────────────────────────────────────────
+    # â”€â”€ WIND ROSE SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _wind_rose_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Wind Rose Analysis")
@@ -1789,7 +1789,7 @@ def generate_wind_pptx_report(
 
     _wind_rose_slide()
 
-    # ── SEASONAL WIND ROSE SLIDES (one slide per season) ─────────────────────
+    # â”€â”€ SEASONAL WIND ROSE SLIDES (one slide per season) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for _sname, _smonths in [("Winter", [12, 1, 2]), ("Spring", [3, 4, 5]),
                               ("Summer", [6, 7, 8]),  ("Fall",   [9, 10, 11])]:
         _sdf = wdf[wdf["month"].isin(_smonths)].copy()
@@ -1797,7 +1797,7 @@ def generate_wind_pptx_report(
             continue
         _srose, _scalm = compute_wind_rose(_sdf, n_sectors=n_sectors, exclude_calm=False)
         _sslide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(_sslide, f"Wind Rose – {_sname}")
+        _slide_title(_sslide, f"Wind Rose â€“ {_sname}")
         _divider(_sslide, 0.62)
         try:
             _spath = _mpl_single_season_rose_png(_srose, _scalm, _sname)
@@ -1809,10 +1809,10 @@ def generate_wind_pptx_report(
             _err(_sslide, f"{_sname} wind rose: {str(_se)[:50]}")
         _add_logo(_sslide)
 
-    # ── WIND SPEED HEATMAP SLIDE ──────────────────────────────────────────────
+    # â”€â”€ WIND SPEED HEATMAP SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _speed_heatmap_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Wind Speed Heatmap (Month × Hour)")
+        _slide_title(slide, "Wind Speed Heatmap (Month Ã— Hour)")
         _divider(slide, 0.62)
 
         try:
@@ -1827,10 +1827,10 @@ def generate_wind_pptx_report(
 
     _speed_heatmap_slide()
 
-    # ── WIND DIRECTION HEATMAP SLIDE ──────────────────────────────────────────
+    # â”€â”€ WIND DIRECTION HEATMAP SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _direction_heatmap_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Wind Direction Heatmap (Month × Hour)")
+        _slide_title(slide, "Wind Direction Heatmap (Month Ã— Hour)")
         _divider(slide, 0.62)
 
         try:
@@ -1845,7 +1845,7 @@ def generate_wind_pptx_report(
 
     _direction_heatmap_slide()
 
-    # ── WIND SPEED HISTOGRAM SLIDE ────────────────────────────────────────────
+    # â”€â”€ WIND SPEED HISTOGRAM SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _speed_histogram_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Wind Speed Distribution")
@@ -1863,10 +1863,10 @@ def generate_wind_pptx_report(
 
     _speed_histogram_slide()
 
-    # ── CLIMATE BUBBLE CHART SLIDE ────────────────────────────────────────────
+    # â”€â”€ CLIMATE BUBBLE CHART SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _climate_bubble_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Temperature – Humidity – Wind Speed")
+        _slide_title(slide, "Temperature â€“ Humidity â€“ Wind Speed")
         _divider(slide, 0.62)
 
         try:
@@ -1881,7 +1881,7 @@ def generate_wind_pptx_report(
 
     _climate_bubble_slide()
 
-    # ── WIND STATISTICS SUMMARY SLIDE ─────────────────────────────────────────
+    # â”€â”€ WIND STATISTICS SUMMARY SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _statistics_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Wind Statistics Summary")
@@ -1971,7 +1971,7 @@ def generate_wind_pptx_report(
 
     _statistics_slide()
 
-    # ── ANNEXURE ──────────────────────────────────────────────────────────────
+    # â”€â”€ ANNEXURE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_annexure_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Annexure")
