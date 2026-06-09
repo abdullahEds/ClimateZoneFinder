@@ -10,8 +10,9 @@ try:
     import streamlit as st
 except ImportError:
     import types
+    import functools as _functools
     st = types.SimpleNamespace(
-        cache_data=lambda **kw: (lambda fn: fn),
+        cache_data=lambda **kw: _functools.lru_cache(maxsize=64),
         fragment=lambda fn: fn,
         warning=lambda *a, **kw: None,
         error=lambda *a, **kw: None,
@@ -41,16 +42,16 @@ STATIONS = {
 }
 
 SURFACE_TYPES = {
-    "Roof Area (Terrace + Service)":                               0.90,
-    "Total paved area (Roads, Paved pathways, Hardscape)":         0.90,
-    "Total green area (Trees, Shrubs, Groundcover)":               0.10,
+    "Roof Area":                               0.90,
+    "Total paved area":         0.90,
+    "Total green area":               0.10,
     "Waterbody":                                                   0.90,
 }
 
 _RUNOFF_SURFACES = [
-    {"label": "Roof Area (Terrace + Service)",                               "key": "roof",  "rc": 0.90, "color": "#1d4ed8"},
-    {"label": "Total paved area on site (Roads, Paved pathways, Hardscape)", "key": "paved", "rc": 0.90, "color": "#6b7280"},
-    {"label": "Total green area on site (Trees, Shrubs, Groundcover)",       "key": "green", "rc": 0.10, "color": "#22c55e"},
+    {"label": "Roof Area",                               "key": "roof",  "rc": 0.90, "color": "#1d4ed8"},
+    {"label": "Total paved area on site", "key": "paved", "rc": 0.90, "color": "#6b7280"},
+    {"label": "Total green area on site",       "key": "green", "rc": 0.10, "color": "#22c55e"},
     {"label": "Waterbody",                                                    "key": "water", "rc": 0.90, "color": "#0891b2"},
 ]
 
@@ -418,7 +419,7 @@ def _render_roof_runoff(df: pd.DataFrame, year: int,
     ca, cb = st.columns(2)
     with ca:
         st.markdown(
-            _card("Total Annual Runoff", _fmt_vol(total_annual * 1000), "All surfaces combined", "#1d4ed8"),
+            _card("Total Annual Runoff", _fmt_vol(total_annual * 1000), "All surfaces combined", "#ac1dd8"),
             unsafe_allow_html=True,
         )
     with cb:

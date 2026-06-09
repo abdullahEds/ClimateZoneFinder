@@ -422,7 +422,7 @@ def generate_rainfall_pptx_report(
                 ("Total Annual Runoff",
                  _fmt_L(total_annual * 1000),
                  "All surfaces combined",
-                 "#1d4ed8"),
+                 "#971dd8"),
                 ("Peak Runoff Month",
                  ml[peak_m - 1],
                  _fmt_L(float(total_m[peak_m]) * 1000),
