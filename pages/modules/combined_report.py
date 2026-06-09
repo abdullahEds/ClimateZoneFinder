@@ -93,12 +93,15 @@ def generate_combined_pptx_report(
                 _fetch_noaa as _bg_fetch_noaa,
                 _fetch_percentile_depth as _bg_fetch_perc,
             )
+            # Use __wrapped__ to bypass @st.cache_data — it fails in non-Streamlit threads
+            _raw_fetch_noaa = getattr(_bg_fetch_noaa, '__wrapped__', _bg_fetch_noaa)
+            _raw_fetch_perc = getattr(_bg_fetch_perc, '__wrapped__', _bg_fetch_perc)
             _rain_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
             _noaa_future = _rain_executor.submit(
-                _bg_fetch_noaa, rainfall_station_id, rainfall_year
+                _raw_fetch_noaa, rainfall_station_id, rainfall_year
             )
             _percentile_future = _rain_executor.submit(
-                _bg_fetch_perc,
+                _raw_fetch_perc,
                 rainfall_station_id,
                 rainfall_gi_percentile,
                 rainfall_gi_start_year,
@@ -1953,10 +1956,13 @@ def generate_combined_pptx_report(
 
         import matplotlib.patches as mpatches
 
-        # Use pre-fetched data from background thread if available
+        # Use pre-fetched data from background thread if available; fall back to direct call
         try:
             if _noaa_future is not None:
-                df_rain = _noaa_future.result(timeout=90)
+                try:
+                    df_rain = _noaa_future.result(timeout=90)
+                except Exception:
+                    df_rain = _fetch_noaa(rainfall_station_id, rainfall_year)
             else:
                 df_rain = _fetch_noaa(rainfall_station_id, rainfall_year)
             if df_rain is None or df_rain.empty:
@@ -2154,7 +2160,10 @@ def generate_combined_pptx_report(
             _add_divider(slide, 0.62)
             try:
                 if _percentile_future is not None:
-                    gi_result = _percentile_future.result(timeout=90)
+                    try:
+                        gi_result = _percentile_future.result(timeout=90)
+                    except Exception:
+                        gi_result = _fetch_percentile_depth(rainfall_station_id, rainfall_gi_percentile, rainfall_gi_start_year)
                 else:
                     gi_result = _fetch_percentile_depth(rainfall_station_id, rainfall_gi_percentile, rainfall_gi_start_year)
                 if "error" in gi_result:
