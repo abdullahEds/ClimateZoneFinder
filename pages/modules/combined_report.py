@@ -1,5 +1,6 @@
 """Combined PowerPoint report generation - Climate + Shading + Wind Analysis."""
 
+import concurrent.futures
 import io
 import os
 import tempfile
@@ -82,6 +83,46 @@ def generate_combined_pptx_report(
 
     BLANK_LAYOUT = prs.slide_layouts[6]
 
+    # ── Background NOAA fetch: starts now, completes before rainfall slides ────
+    _noaa_future = None
+    _percentile_future = None
+    _rain_executor = None
+    if rainfall_station_id and rainfall_year:
+        try:
+            from modules.rainfall_module import (
+                _fetch_noaa as _bg_fetch_noaa,
+                _fetch_percentile_depth as _bg_fetch_perc,
+            )
+            _rain_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+            _noaa_future = _rain_executor.submit(
+                _bg_fetch_noaa, rainfall_station_id, rainfall_year
+            )
+            _percentile_future = _rain_executor.submit(
+                _bg_fetch_perc,
+                rainfall_station_id,
+                rainfall_gi_percentile,
+                rainfall_gi_start_year,
+            )
+        except Exception:
+            pass
+
+    # ── pvlib solar-position cache: compute once, reuse across sun-path slides ─
+    _sol_pos_cache = {}
+
+    def _get_solar_positions(lat, lon, tz_str):
+        key = (lat, lon, str(tz_str))
+        if key not in _sol_pos_cache:
+            from pvlib import solarposition as _sp_lib
+            try:
+                _tz = pytz.timezone(str(tz_str))
+            except Exception:
+                _tz = pytz.UTC
+            times = pd.date_range(
+                "2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left"
+            )
+            _sol_pos_cache[key] = (_tz, times, _sp_lib.get_solarposition(times, lat, lon))
+        return _sol_pos_cache[key]
+
     TITLE_RED   = RGBColor(0xC0, 0x00, 0x00)
     DARK_GREY   = RGBColor(0x40, 0x40, 0x40)
     WHITE       = RGBColor(0xFF, 0xFF, 0xFF)
@@ -128,7 +169,7 @@ def generate_combined_pptx_report(
 
     def _save_mpl_figure(fig) -> str:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            fig.savefig(tmp.name, dpi=130, bbox_inches='tight', facecolor='white')
+            fig.savefig(tmp.name, dpi=100, bbox_inches='tight', facecolor='white')
             return tmp.name
 
     def _err_box(slide, err):
@@ -349,7 +390,7 @@ def generate_combined_pptx_report(
                 else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
             )
 
-            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=100)
             ax.fill_between(daily_stats["doy"], comfort_line - 3.5, comfort_line + 3.5,
                             alpha=0.18, color='gray', label='ASHRAE 80% Comfort')
             ax.fill_between(daily_stats["doy"], comfort_line - 2.5, comfort_line + 2.5,
@@ -398,7 +439,7 @@ def generate_combined_pptx_report(
             months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
             x = np.arange(12)
 
-            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=100)
             bar_w = 0.30
             ax.bar(x - bar_w, monthly["t_min"], bar_w, color='#90CAF9', label='Min Temp')
             ax.bar(x,          monthly["t_avg"], bar_w, color='#C00000', label='Avg Temp', alpha=0.85)
@@ -466,7 +507,7 @@ def generate_combined_pptx_report(
                 else pd.to_datetime(f"2024-{end_date.month+1:02d}-01").dayofyear - 1
             )
 
-            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.4), dpi=100)
             ax.axhspan(75, 100, alpha=0.13, color='#FF6B6B', label='Condensation Risk (>75%)')
             ax.axhspan(60,  75, alpha=0.13, color='#FFA500', label='High RH (60–75%)')
             ax.axhspan(30,  60, alpha=0.13, color='#4ECDC4', label='Comfortable (30–60%)')
@@ -517,7 +558,7 @@ def generate_combined_pptx_report(
             months_lbl = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
             x = np.arange(12)
 
-            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=130)
+            fig, ax = plt.subplots(figsize=(13, 5.0), dpi=100)
             bar_w = 0.30
             ax.bar(x - bar_w, monthly_rh["rh_min"], bar_w, color='#AED6F1', label='Min RH')
             ax.bar(x,          monthly_rh["rh_avg"], bar_w, color='#0066cc', label='Avg RH', alpha=0.85)
@@ -597,7 +638,7 @@ def generate_combined_pptx_report(
         #     sol = sol[sol["apparent_elevation"] > 0].copy()
         #     sol["r"] = 90 - sol["apparent_elevation"]
 
-        #     fig = plt.figure(figsize=(9, 7.5), dpi=130, facecolor='white')
+        #     fig = plt.figure(figsize=(9, 7.5), dpi=100, facecolor='white')
         #     ax = fig.add_subplot(111, projection='polar')
         #     ax.set_theta_zero_location('N')
         #     ax.set_theta_direction(-1)
@@ -677,19 +718,12 @@ def generate_combined_pptx_report(
 
         try:
             from pvlib import solarposition as _solpos_lib
-
-            try:
-                _tz = pytz.timezone(tz_str)
-            except Exception:
-                _tz = pytz.UTC
-
-            times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=_tz, inclusive="left")
-            sol = _solpos_lib.get_solarposition(times, lat, lon)
-            sol = sol[sol["apparent_elevation"] > 0].copy()
+            _tz, times, _sol_full = _get_solar_positions(lat, lon, tz_str)
+            sol = _sol_full[_sol_full["apparent_elevation"] > 0].copy()
             sol["r"] = 90 - sol["apparent_elevation"]
 
             # ---------- FIGURE ----------
-            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor='white')
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=100, facecolor='white')
             ax = fig.add_subplot(111, projection='polar')
 
             ax.set_theta_zero_location('N')
@@ -874,15 +908,8 @@ def generate_combined_pptx_report(
 
         try:
             from pvlib import solarposition as _sp
-
-            try:
-                tz = pytz.timezone(_tz_str)
-            except Exception:
-                tz = pytz.UTC
-
-            times = pd.date_range("2020-01-01", "2021-01-01", freq="h", tz=tz, inclusive="left")
-            sol = _sp.get_solarposition(times, _lat, _lon)
-            sol = sol[sol["apparent_elevation"] > 0].copy()
+            tz, times, _sol_full = _get_solar_positions(_lat, _lon, _tz_str)
+            sol = _sol_full[_sol_full["apparent_elevation"] > 0].copy()
 
             _df = df.copy()
             if "datetime" not in _df.columns:
@@ -947,7 +974,7 @@ def generate_combined_pptx_report(
                 (sol["global_horizontal_irradiance"] > rad_threshold)
             )
 
-            fig = plt.figure(figsize=(7.5, 7.5), dpi=130, facecolor="white")
+            fig = plt.figure(figsize=(7.5, 7.5), dpi=100, facecolor="white")
             ax = fig.add_subplot(111, projection="polar")
             ax.set_theta_zero_location("N")
             ax.set_theta_direction(-1)
@@ -1264,7 +1291,7 @@ def generate_combined_pptx_report(
                       fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
             plt.tight_layout()
             path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
             plt.close(fig2)
             return path
 
@@ -1288,7 +1315,7 @@ def generate_combined_pptx_report(
             plt.colorbar(im, ax=ax, label="m/s", shrink=0.8)
             plt.tight_layout()
             path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
             plt.close(fig2)
             return path
 
@@ -1319,7 +1346,7 @@ def generate_combined_pptx_report(
             cbar.set_label("Direction")
             plt.tight_layout()
             path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
             plt.close(fig2)
             return path
 
@@ -1344,7 +1371,7 @@ def generate_combined_pptx_report(
             ax.spines["right"].set_visible(False)
             plt.tight_layout()
             path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
             plt.close(fig2)
             return path
 
@@ -1379,7 +1406,7 @@ def generate_combined_pptx_report(
             ax.spines["right"].set_visible(False)
             plt.tight_layout()
             path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
             plt.close(fig2)
             return path
 
@@ -1436,7 +1463,7 @@ def generate_combined_pptx_report(
                       fontsize=9, title="Wind Speed (m/s)", title_fontsize=9)
             plt.tight_layout()
             path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
-            fig2.savefig(path, dpi=130, bbox_inches="tight", facecolor="white")
+            fig2.savefig(path, dpi=100, bbox_inches="tight", facecolor="white")
             plt.close(fig2)
             return path
 
@@ -1926,9 +1953,13 @@ def generate_combined_pptx_report(
 
         import matplotlib.patches as mpatches
 
+        # Use pre-fetched data from background thread if available
         try:
-            df_rain = _fetch_noaa(rainfall_station_id, rainfall_year)
-            if df_rain.empty:
+            if _noaa_future is not None:
+                df_rain = _noaa_future.result(timeout=90)
+            else:
+                df_rain = _fetch_noaa(rainfall_station_id, rainfall_year)
+            if df_rain is None or df_rain.empty:
                 return
         except Exception:
             return
@@ -2044,7 +2075,7 @@ def generate_combined_pptx_report(
                 annual_total = float(monthly.sum())
                 annual_mean  = annual_total / 12
                 wettest_idx  = int(monthly.idxmax())
-                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=100)
                 ax.bar(xm, monthly.values, color=[_intensity_color(v) for v in monthly.values], edgecolor="none")
                 ax.axhline(annual_mean, color="#ef4444", linewidth=1.4, linestyle="--")
                 ax.text(10.6, annual_mean * 1.02, f"Mean: {annual_mean:.0f} mm", ha="right", va="bottom", fontsize=8, color="#ef4444")
@@ -2089,7 +2120,7 @@ def generate_combined_pptx_report(
                 moderate = _cnt(10, 25)
                 heavy    = _cnt(25, rainfall_heavy_threshold)
                 extreme  = _cnt(rainfall_heavy_threshold)
-                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=100)
                 ax.bar(xm, light.values, color="#bfdbfe", label="Light (< 10 mm)")
                 ax.bar(xm, moderate.values, bottom=light.values, color="#3b82f6", label="Moderate (10–25 mm)")
                 ax.bar(xm, heavy.values, bottom=(light + moderate).values, color="#1d4ed8", label=f"Heavy (25–{rainfall_heavy_threshold:.0f} mm)")
@@ -2122,7 +2153,10 @@ def generate_combined_pptx_report(
             _add_slide_title(slide, f"Rainwater Harvesting Potential  —  {rainfall_station_name}, {rainfall_year}")
             _add_divider(slide, 0.62)
             try:
-                gi_result = _fetch_percentile_depth(rainfall_station_id, rainfall_gi_percentile, rainfall_gi_start_year)
+                if _percentile_future is not None:
+                    gi_result = _percentile_future.result(timeout=90)
+                else:
+                    gi_result = _fetch_percentile_depth(rainfall_station_id, rainfall_gi_percentile, rainfall_gi_start_year)
                 if "error" in gi_result:
                     _err_box(slide, f"Baseline fetch failed: {gi_result['error']}")
                     _add_logo(slide)
@@ -2136,7 +2170,7 @@ def generate_combined_pptx_report(
                 total_overflow = float(daily["overflow"].sum())
                 overflow_days  = int((daily["overflow"] > 0).sum())
                 worst_m_idx    = int(mgrp["overflow"].idxmax()) if total_overflow > 0 else 1
-                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=130)
+                fig, ax = plt.subplots(figsize=(13, 4.5), dpi=100)
                 ax.bar(xm, mgrp["stored"].values, color="#22c55e", label="Stored (L/m²)")
                 ax.bar(xm, -mgrp["overflow"].values, color="#ef4444", label="Overflow (L/m²)")
                 ax.axhline(0, color="#374151", linewidth=1.2, linestyle="--")
@@ -2178,7 +2212,7 @@ def generate_combined_pptx_report(
             try:
                 monthly_prcp = df_f.groupby("month")["prcp_mm"].sum().reindex(range(1, 13), fill_value=0)
                 monthly_vols = {s["key"]: (monthly_prcp / 1000.0) * _sa.get(s["key"], 0.0) * s["rc"] for s in _RUNOFF_SURFACES}
-                fig, ax = plt.subplots(figsize=(13, 4.0), dpi=130)
+                fig, ax = plt.subplots(figsize=(13, 4.0), dpi=100)
                 bottom = np.zeros(12)
                 for surf in _RUNOFF_SURFACES:
                     vals = monthly_vols[surf["key"]].values
@@ -2213,6 +2247,9 @@ def generate_combined_pptx_report(
         _surface_runoff()
 
     _prepare_rainfall_slides()
+
+    if _rain_executor is not None:
+        _rain_executor.shutdown(wait=False)
 
     # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
     def _make_annexure_slide():

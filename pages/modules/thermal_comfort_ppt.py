@@ -1,4 +1,4 @@
-"""Thermal Comfort PowerPoint report generation - PPT slides for thermal comfort analysis."""
+﻿"""Thermal Comfort PowerPoint report generation - PPT slides for thermal comfort analysis."""
 
 import io
 import os
@@ -12,9 +12,9 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Thermal Comfort Visualization Functions (non-Streamlit)
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def compute_psychrometric_simple(df: pd.DataFrame) -> pd.DataFrame:
     """Compute humidity ratio and wet-bulb temperature for PPT generation."""
@@ -24,7 +24,7 @@ def compute_psychrometric_simple(df: pd.DataFrame) -> pd.DataFrame:
     T = pd.to_numeric(out["dry_bulb_temperature"], errors="coerce")
     RH = pd.to_numeric(out["relative_humidity"], errors="coerce").clip(0, 100)
     
-    # Saturation vapour pressure [Pa] – Magnus-Tetens
+    # Saturation vapour pressure [Pa] â€“ Magnus-Tetens
     e_s = 611.2 * np.exp(17.67 * T / (T + 243.5))
     # Actual vapour pressure [Pa]
     e = RH / 100.0 * e_s
@@ -63,7 +63,7 @@ def compute_adaptive_comfort_simple(df: pd.DataFrame) -> pd.DataFrame:
     # Daily mean temperature
     daily_mean = out.groupby("doy")["dry_bulb_temperature"].mean()
     
-    # Exponential running mean: T_pma(d) = (1–α)·T_d + α·T_pma(d-1)
+    # Exponential running mean: T_pma(d) = (1â€“Î±)Â·T_d + Î±Â·T_pma(d-1)
     doy_sorted = sorted(daily_mean.index)
     t_pma_daily = {}
     prev = daily_mean[doy_sorted[0]]
@@ -83,7 +83,7 @@ def compute_adaptive_comfort_simple(df: pd.DataFrame) -> pd.DataFrame:
     out["t_comf_90_lo"] = out["t_comf"] - 2.5
     out["t_comf_90_hi"] = out["t_comf"] + 2.5
     
-    # Applicability (ASHRAE 55 limits prevailing mean to 10–33.5 °C)
+    # Applicability (ASHRAE 55 limits prevailing mean to 10â€“33.5 Â°C)
     out["adaptive_applicable"] = out["t_pma"].between(10.0, 33.5)
     
     # Whether current hour is within bands
@@ -112,7 +112,7 @@ def classify_comfort_simple(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_comfort_heatmap(df: pd.DataFrame) -> plt.Figure:
-    """Create comfort category heatmap (Hour × Month)."""
+    """Create comfort category heatmap (Hour Ã— Month)."""
     COMFORT_CATS = ["Comfortable", "Too Hot", "Too Cold", "Too Humid", "Too Dry"]
     COMFORT_COLORS_NUMERIC = {
         "Comfortable": 0,
@@ -152,7 +152,7 @@ def plot_comfort_heatmap(df: pd.DataFrame) -> plt.Figure:
     
     ax.set_xlabel("Hour of Day", fontsize=11, fontweight='bold')
     ax.set_ylabel("Month", fontsize=11, fontweight='bold')
-    ax.set_title("Comfort Heatmap – Hour × Month (dominant category)", fontsize=12, fontweight='bold', pad=10, color='#333')
+    ax.set_title("Comfort Heatmap â€“ Hour Ã— Month (dominant category)", fontsize=12, fontweight='bold', pad=10, color='#333')
     
     fig.patch.set_facecolor('white')
     plt.tight_layout()
@@ -227,8 +227,8 @@ def plot_degree_hours_monthly(df: pd.DataFrame) -> plt.Figure:
     
     ax.set_xticks(x)
     ax.set_xticklabels(months_lbl, fontsize=10)
-    ax.set_ylabel("Degree Hours (°C·h)", fontsize=11, fontweight='bold')
-    ax.set_title(f"Monthly Degree Hours (CDH base {CDH_BASE:.0f}°C | HDH base {HDH_BASE:.0f}°C)", 
+    ax.set_ylabel("Degree Hours (Â°CÂ·h)", fontsize=11, fontweight='bold')
+    ax.set_title(f"Monthly Degree Hours (CDH base {CDH_BASE:.0f}Â°C | HDH base {HDH_BASE:.0f}Â°C)", 
                  fontsize=12, fontweight='bold', pad=10, color='#333')
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=2, frameon=True, fontsize=10)
     ax.grid(True, alpha=0.25, linestyle='--', axis='y')
@@ -274,11 +274,11 @@ def plot_adaptive_comfort_scatter(df: pd.DataFrame) -> plt.Figure:
                          vmax=fdf["dry_bulb_temperature"].max())
     
     cbar = plt.colorbar(scatter, ax=ax, fraction=0.035, pad=0.03)
-    cbar.set_label('DBT (°C)', fontsize=10, fontweight='bold')
+    cbar.set_label('DBT (Â°C)', fontsize=10, fontweight='bold')
     
-    ax.set_xlabel("Prevailing Mean Outdoor Temperature T_pma (°C)", fontsize=11, fontweight='bold')
-    ax.set_ylabel("Dry Bulb Temperature (°C)", fontsize=11, fontweight='bold')
-    ax.set_title("Adaptive Comfort – ASHRAE 55 (T_pma vs. Indoor Temperature)", 
+    ax.set_xlabel("Prevailing Mean Outdoor Temperature T_pma (Â°C)", fontsize=11, fontweight='bold')
+    ax.set_ylabel("Dry Bulb Temperature (Â°C)", fontsize=11, fontweight='bold')
+    ax.set_title("Adaptive Comfort â€“ ASHRAE 55 (T_pma vs. Indoor Temperature)", 
                  fontsize=12, fontweight='bold', pad=10, color='#333')
     ax.legend(loc='upper left', fontsize=10, frameon=True)
     ax.grid(True, alpha=0.25, linestyle='--')
@@ -356,13 +356,13 @@ def plot_psychrometric_chart(df: pd.DataFrame) -> plt.Figure:
                         vmin=T.min(), vmax=T.max())
     
     cbar = plt.colorbar(scatter, ax=ax, fraction=0.035, pad=0.03)
-    cbar.set_label('DBT (°C)', fontsize=10, fontweight='bold')
+    cbar.set_label('DBT (Â°C)', fontsize=10, fontweight='bold')
     
     ax.set_xlim(-5, 50)
     ax.set_ylim(0, 28)
-    ax.set_xlabel("Dry Bulb Temperature (°C)", fontsize=11, fontweight='bold')
+    ax.set_xlabel("Dry Bulb Temperature (Â°C)", fontsize=11, fontweight='bold')
     ax.set_ylabel("Humidity Ratio (g/kg dry air)", fontsize=11, fontweight='bold')
-    ax.set_title("Psychrometric Chart – Hourly Climate Data with Comfort & Strategy Zones", 
+    ax.set_title("Psychrometric Chart â€“ Hourly Climate Data with Comfort & Strategy Zones", 
                  fontsize=12, fontweight='bold', pad=10, color='#333')
     ax.legend(loc='upper left', fontsize=9, frameon=True)
     ax.grid(True, alpha=0.25, linestyle='--')
@@ -414,9 +414,9 @@ def plot_comfort_percentages(df: pd.DataFrame) -> plt.Figure:
         return fig
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Main Thermal Comfort PPT Report Generator
-# ──────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def generate_thermal_comfort_pptx_report(
     df: pd.DataFrame,
@@ -495,7 +495,7 @@ def generate_thermal_comfort_pptx_report(
     
     def _save_fig(fig) -> str:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-            fig.savefig(tmp.name, dpi=130, bbox_inches="tight", facecolor="white")
+            fig.savefig(tmp.name, dpi=100, bbox_inches="tight", facecolor="white")
             return tmp.name
     
     # Ensure necessary columns exist
@@ -526,7 +526,7 @@ def generate_thermal_comfort_pptx_report(
         report_bytes.seek(0)
         return report_bytes
     
-    # ── COVER SLIDE ───────────────────────────────────────────────────────────
+    # â”€â”€ COVER SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _cover():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         bg = slide.shapes.add_shape(1, Inches(0), Inches(2.4), Inches(SW), Inches(2.6))
@@ -561,10 +561,10 @@ def generate_thermal_comfort_pptx_report(
     
     _cover()
     
-    # ── COMFORT HEATMAP SLIDE ─────────────────────────────────────────────────
+    # â”€â”€ COMFORT HEATMAP SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _comfort_heatmap_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Comfort Heatmap – Hour × Month")
+        _slide_title(slide, "Comfort Heatmap â€“ Hour Ã— Month")
         _divider(slide, 0.62)
         
         try:
@@ -581,10 +581,10 @@ def generate_thermal_comfort_pptx_report(
     
     _comfort_heatmap_slide()
     
-    # ── PSYCHROMETRIC CHART SLIDE ─────────────────────────────────────────────
+    # â”€â”€ PSYCHROMETRIC CHART SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _psychrometric_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Psychrometric Chart – Climate Data")
+        _slide_title(slide, "Psychrometric Chart â€“ Climate Data")
         _divider(slide, 0.62)
         
         try:
@@ -601,7 +601,7 @@ def generate_thermal_comfort_pptx_report(
     
     _psychrometric_slide()
     
-    # ── STRATEGY DISTRIBUTION SLIDE ───────────────────────────────────────────
+    # â”€â”€ STRATEGY DISTRIBUTION SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _strategy_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Design Strategy Opportunity Distribution")
@@ -621,10 +621,10 @@ def generate_thermal_comfort_pptx_report(
     
     _strategy_slide()
     
-    # ── DEGREE HOURS SLIDE ────────────────────────────────────────────────────
+    # â”€â”€ DEGREE HOURS SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _degree_hours_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Monthly Degree Hours – Cooling & Heating Demand")
+        _slide_title(slide, "Monthly Degree Hours â€“ Cooling & Heating Demand")
         _divider(slide, 0.62)
         
         try:
@@ -641,10 +641,10 @@ def generate_thermal_comfort_pptx_report(
     
     _degree_hours_slide()
     
-    # ── ADAPTIVE COMFORT SLIDE ────────────────────────────────────────────────
+    # â”€â”€ ADAPTIVE COMFORT SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _adaptive_comfort_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
-        _slide_title(slide, "Adaptive Comfort – ASHRAE 55 Analysis")
+        _slide_title(slide, "Adaptive Comfort â€“ ASHRAE 55 Analysis")
         _divider(slide, 0.62)
         
         try:
@@ -661,7 +661,7 @@ def generate_thermal_comfort_pptx_report(
     
     _adaptive_comfort_slide()
     
-    # ── COMFORT PERFORMANCE SUMMARY SLIDE ─────────────────────────────────────
+    # â”€â”€ COMFORT PERFORMANCE SUMMARY SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _performance_summary_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Thermal Comfort Performance Summary")
@@ -681,7 +681,7 @@ def generate_thermal_comfort_pptx_report(
     
     _performance_summary_slide()
     
-    # ── DESIGN RECOMMENDATIONS SLIDE ──────────────────────────────────────────
+    # â”€â”€ DESIGN RECOMMENDATIONS SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _recommendations_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Design Recommendations & Strategies")
@@ -706,13 +706,13 @@ def generate_thermal_comfort_pptx_report(
             p.space_after = Pt(6)
             
             p = tf.add_paragraph()
-            p.text = f"• Comfortable hours: {pct_comfortable:.1f}%  |  Overheating: {pct_hot:.1f}%  |  Undercooling: {pct_cold:.1f}%"
+            p.text = f"â€¢ Comfortable hours: {pct_comfortable:.1f}%  |  Overheating: {pct_hot:.1f}%  |  Undercooling: {pct_cold:.1f}%"
             p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.space_after = Pt(4)
             
             p = tf.add_paragraph()
-            p.text = f"• Mean Relative Humidity: {mean_rh:.1f}%"
+            p.text = f"â€¢ Mean Relative Humidity: {mean_rh:.1f}%"
             p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.space_after = Pt(10)
@@ -728,50 +728,50 @@ def generate_thermal_comfort_pptx_report(
             if pct_comfortable < 40:
                 if pct_hot > pct_cold:
                     p = tf.add_paragraph()
-                    p.text = "• Priority: Cooling strategies – Implement high-performance envelope, external shading, and natural ventilation"
+                    p.text = "â€¢ Priority: Cooling strategies â€“ Implement high-performance envelope, external shading, and natural ventilation"
                     p.font.size = Pt(11)
                     p.font.color.rgb = DARK_GREY
                     p.space_after = Pt(3)
                     
                     p = tf.add_paragraph()
-                    p.text = "• Consider nighttime cooling recovery and thermal mass activation"
+                    p.text = "â€¢ Consider nighttime cooling recovery and thermal mass activation"
                     p.font.size = Pt(11)
                     p.font.color.rgb = DARK_GREY
                     p.space_after = Pt(3)
                 else:
                     p = tf.add_paragraph()
-                    p.text = "• Priority: Heating strategies – Maximize solar heat gain during winter with south-facing glazing"
+                    p.text = "â€¢ Priority: Heating strategies â€“ Maximize solar heat gain during winter with south-facing glazing"
                     p.font.size = Pt(11)
                     p.font.color.rgb = DARK_GREY
                     p.space_after = Pt(3)
                     
                     p = tf.add_paragraph()
-                    p.text = "• Ensure robust thermal insulation and minimize infiltration losses"
+                    p.text = "â€¢ Ensure robust thermal insulation and minimize infiltration losses"
                     p.font.size = Pt(11)
                     p.font.color.rgb = DARK_GREY
                     p.space_after = Pt(3)
             else:
                 p = tf.add_paragraph()
-                p.text = "• Climate is generally favorable – Prioritize passive design with natural ventilation and daylighting"
+                p.text = "â€¢ Climate is generally favorable â€“ Prioritize passive design with natural ventilation and daylighting"
                 p.font.size = Pt(11)
                 p.font.color.rgb = DARK_GREY
                 p.space_after = Pt(3)
             
             if mean_rh > 65:
                 p = tf.add_paragraph()
-                p.text = "• High humidity detected – Ensure adequate dehumidification and mold risk mitigation"
+                p.text = "â€¢ High humidity detected â€“ Ensure adequate dehumidification and mold risk mitigation"
                 p.font.size = Pt(11)
                 p.font.color.rgb = DARK_GREY
                 p.space_after = Pt(3)
             elif mean_rh < 30:
                 p = tf.add_paragraph()
-                p.text = "• Low humidity detected – Humidification may be required in heating season for occupant comfort"
+                p.text = "â€¢ Low humidity detected â€“ Humidification may be required in heating season for occupant comfort"
                 p.font.size = Pt(11)
                 p.font.color.rgb = DARK_GREY
                 p.space_after = Pt(3)
             
             p = tf.add_paragraph()
-            p.text = "• Adaptive Comfort – Leverage occupant behavior (clothing, behavior) to expand acceptable temperature ranges"
+            p.text = "â€¢ Adaptive Comfort â€“ Leverage occupant behavior (clothing, behavior) to expand acceptable temperature ranges"
             p.font.size = Pt(11)
             p.font.color.rgb = DARK_GREY
             p.space_after = Pt(0)
@@ -786,7 +786,7 @@ def generate_thermal_comfort_pptx_report(
     
     _recommendations_slide()
     
-    # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
+    # â”€â”€ ANNEXURE SLIDE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _make_annexure_slide():
         slide = prs.slides.add_slide(BLANK_LAYOUT)
         _slide_title(slide, "Annexure")
@@ -826,11 +826,11 @@ def generate_thermal_comfort_pptx_report(
         p.space_after = Pt(4)
         
         for item in [
-            "• Thermal comfort analysis based on ASHRAE 55 standard",
-            "• Psychrometric calculations using Magnus-Tetens formula",
-            "• Adaptive comfort model per ASHRAE 55-2017 §5.4",
-            "• Streamlit, © Streamlit Inc., licensed under Apache 2.0",
-            "• Python © Python Software Foundation, licensed under PSF License Version 2",
+            "â€¢ Thermal comfort analysis based on ASHRAE 55 standard",
+            "â€¢ Psychrometric calculations using Magnus-Tetens formula",
+            "â€¢ Adaptive comfort model per ASHRAE 55-2017 Â§5.4",
+            "â€¢ Streamlit, Â© Streamlit Inc., licensed under Apache 2.0",
+            "â€¢ Python Â© Python Software Foundation, licensed under PSF License Version 2",
         ]:
             p = tf.add_paragraph()
             p.text = item
