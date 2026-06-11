@@ -1,47 +1,136 @@
-"""Test script to verify API is working."""
+"""Pytest test suite for the FastAPI report API (report_api.py)."""
 
-import requests
+import pathlib
+import pytest
+import httpx
 
-def test_api():
-    """Test the API endpoints."""
-    
-    print("Testing Climate Zone Finder API...")
-    print("-" * 50)
-    
-    # Test health endpoint
-    print("\n1. Testing Health Endpoint:")
-    try:
-        response = requests.get("http://localhost:8000/api/health", timeout=5)
-        print(f"Status Code: {response.status_code}")
-        print(f"Raw Response: {response.text}")
-        if response.status_code == 200:
-            print("✓ Health endpoint is working!")
-    except Exception as e:
-        print(f"✗ Error: {e}")
-    
-    # Test documentation endpoint
-    print("\n2. Testing Documentation Endpoint:")
-    try:
-        response = requests.get("http://localhost:8000/api/docs", timeout=5)
-        print(f"Status Code: {response.status_code}")
-        if response.status_code == 200:
-            print("✓ Documentation endpoint is working!")
-            print(f"Response snippet: {response.text[:100]}...")
-    except Exception as e:
-        print(f"✗ Error: {e}")
-    
-    print("\n" + "=" * 50)
-    print("API Setup Complete!")
-    print("=" * 50)
-    print("\nAPI is running on: http://localhost:8000")
-    print("\nAvailable endpoints:")
-    print("  - GET  /api/health")
-    print("  - GET  /api/docs")
-    print("  - POST /api/reports/climate-analysis (with EPW file)")
-    print("  - POST /api/reports/shading-analysis (with EPW file)")
-    print("\nDocumentation:")
-    print("  - See API_README.md for full API documentation")
-    print("  - Check API_README.md for usage examples in Python, JavaScript, PHP, Java, etc.")
+from report_api import app
 
-if __name__ == "__main__":
-    test_api()
+_EPW_PATH = pathlib.Path(__file__).parent / "IND_DL_New.Delhi-Safdarjung.AP.421820_ISHRAE2014.epw"
+_EPW_BYTES = _EPW_PATH.read_bytes() if _EPW_PATH.exists() else None
+
+_PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+_SKIP_NO_FILE = pytest.mark.skipif(
+    _EPW_BYTES is None,
+    reason="Bundled EPW file not found",
+)
+
+pytestmark = pytest.mark.anyio
+
+
+async def _get(path: str, **kwargs):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        return await client.get(path, **kwargs)
+
+
+async def _post(path: str, **kwargs):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        return await client.post(path, **kwargs)
+
+
+# ── Health / docs ─────────────────────────────────────────────────────────────
+
+async def test_health():
+    resp = await _get("/api/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+async def test_docs_endpoint():
+    resp = await _get("/api/docs")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "title" in body
+    assert "endpoints" in body
+
+
+# ── Stations ──────────────────────────────────────────────────────────────────
+
+async def test_rainfall_stations():
+    resp = await _get("/api/rainfall/stations")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "stations" in data
+    assert len(data["stations"]) >= 10
+
+
+# ── Climate report ────────────────────────────────────────────────────────────
+
+@_SKIP_NO_FILE
+async def test_climate_report_valid_epw():
+    resp = await _post(
+        "/api/reports/climate-analysis",
+        files={"file": ("test.epw", _EPW_BYTES, "application/octet-stream")},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith(_PPTX_MIME)
+    cd = resp.headers.get("content-disposition", "")
+    assert ".pptx" in cd
+
+
+async def test_climate_report_invalid_file():
+    resp = await _post(
+        "/api/reports/climate-analysis",
+        files={"file": ("bad.txt", b"this is not an epw file", "text/plain")},
+    )
+    assert resp.status_code == 400
+
+
+# ── Combined report ───────────────────────────────────────────────────────────
+
+@_SKIP_NO_FILE
+async def test_combined_report_valid():
+    resp = await _post(
+        "/api/reports/combined-analysis",
+        files={"file": ("test.epw", _EPW_BYTES, "application/octet-stream")},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith(_PPTX_MIME)
+
+
+@_SKIP_NO_FILE
+async def test_combined_report_invalid_rainfall_station():
+    resp = await _post(
+        "/api/reports/combined-analysis",
+        data={"rainfall_station_name": "INVALID_STATION", "rainfall_year": "2023"},
+        files={"file": ("test.epw", _EPW_BYTES, "application/octet-stream")},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "detail" in body
+
+
+# ── Wind report ───────────────────────────────────────────────────────────────
+
+@_SKIP_NO_FILE
+async def test_wind_report_invalid_sectors():
+    resp = await _post(
+        "/api/reports/wind-analysis",
+        data={"n_sectors": "7"},
+        files={"file": ("test.epw", _EPW_BYTES, "application/octet-stream")},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert "detail" in body
+
+
+# ── Error response schema ─────────────────────────────────────────────────────
+
+async def test_error_response_schema_400():
+    resp = await _post(
+        "/api/reports/climate-analysis",
+        files={"file": ("bad.txt", b"not epw", "text/plain")},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    detail = body.get("detail")
+    assert isinstance(detail, dict), f"Expected dict detail, got: {type(detail)}"
+    assert "error" in detail
+    assert "detail" in detail

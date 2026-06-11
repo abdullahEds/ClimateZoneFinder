@@ -12,8 +12,11 @@ pages/modules/__pycache__
 
 # Large data files not needed by the API
 *.epw
-*.xlsx
-~$*
+~$*.xlsx
+# Exclude generated PPTX outputs but keep the branded template
+*.pptx
+!*template*.pptx
+!*Voha*.pptx
 
 # Streamlit-only files
 requirements.txt

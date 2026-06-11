@@ -4,7 +4,8 @@ import concurrent.futures
 import io
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, date
+from typing import Optional
 # from tkinter import SW
 
 import matplotlib.pyplot as plt
@@ -17,7 +18,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-from modules.shading_helpers import (
+from .shading_helpers import (
     _ORIENTATIONS,
     build_thermal_matrix,
     compute_shading_geometry,
@@ -42,28 +43,28 @@ def _ppt_remove_all_slides(prs):
 
 def generate_combined_pptx_report(
     df: pd.DataFrame,
-    start_date,
-    end_date,
+    start_date: date,
+    end_date: date,
     start_hour: int,
     end_hour: int,
     selected_parameter: str,
-    metadata: dict = None,
+    metadata: Optional[dict] = None,
     temp_threshold: float = 28.0,
     rad_threshold: float = 315.0,
     design_cutoff_angle: float = 45.0,
     n_sectors: int = 16,
     include_thermal_comfort: bool = False,
-    # ── Optional Rainfall Analysis ─────────────────────────────────────────────
-    rainfall_station_name: str = None,
-    rainfall_station_id: str = None,
-    rainfall_year: int = None,
+    rainfall_station_name: Optional[str] = None,
+    rainfall_station_id: Optional[str] = None,
+    rainfall_year: Optional[int] = None,
     rainfall_start_month: int = 1,
     rainfall_end_month: int = 12,
     rainfall_heavy_threshold: float = 50.0,
-    rainfall_surface_areas: dict = None,
+    rainfall_surface_areas: Optional[dict[str, float]] = None,
     rainfall_gi_percentile: int = 95,
     rainfall_gi_start_year: int = 1990,
-):
+    branding: Optional[dict] = None,
+) -> io.BytesIO:
     """Generate a combined PowerPoint report with Climate + Shading Analysis + Assumptions slide."""
 
     try:
@@ -89,7 +90,7 @@ def generate_combined_pptx_report(
     _rain_executor = None
     if rainfall_station_id and rainfall_year:
         try:
-            from modules.rainfall_module import (
+            from .rainfall_module import (
                 _fetch_noaa as _bg_fetch_noaa,
                 _fetch_percentile_depth as _bg_fetch_perc,
             )
@@ -193,6 +194,7 @@ def generate_combined_pptx_report(
 
     # ── COVER SLIDE ───────────────────────────────────────────────────────────
     def _make_cover_slide():
+        _branding = branding or {}
         slide = prs.slides.add_slide(BLANK_LAYOUT)
 
         bg = slide.shapes.add_shape(1, Inches(0), Inches(2.5), Inches(SW), Inches(2.5))
@@ -216,15 +218,25 @@ def generate_combined_pptx_report(
         _city = metadata.get("city", "") if metadata else ""
         _location = metadata.get("location", "") if metadata else ""
         location_display = _city if _city else (_location if _location else "Location")
-        run2.text = f"{location_display}"
+        project_display = _branding.get("project_name") or location_display
+        run2.text = project_display
         run2.font.size = Pt(16)
         run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
+
+        # Client name (if provided)
+        if _branding.get("client_name"):
+            tb_client = slide.shapes.add_textbox(Inches(0.6), Inches(4.55), Inches(SW - 1.2), Inches(0.45))
+            run_c = tb_client.text_frame.paragraphs[0].add_run()
+            run_c.text = f"Prepared for: {_branding['client_name']}"
+            run_c.font.size = Pt(12)
+            run_c.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
 
         tb3 = slide.shapes.add_textbox(Inches(0.6), Inches(6.5), Inches(SW - 1.2), Inches(0.4))
         tf3 = tb3.text_frame
         p3 = tf3.paragraphs[0]
         run3 = p3.add_run()
-        run3.text = "Comprehensive Climate & Shading Analysis with Strategic Recommendations"
+        _report_date = _branding.get("report_date") or datetime.now().strftime("%d %B %Y")
+        run3.text = _report_date
         run3.font.size = Pt(11)
         run3.font.color.rgb = DARK_GREY
 
@@ -1240,7 +1252,7 @@ def generate_combined_pptx_report(
     def _prepare_wind_slides():
         """Prepare and add wind analysis slides."""
         try:
-            from modules.wind_module import (
+            from .wind_module import (
                 prepare_wind_data, compute_wind_rose, compute_wind_statistics,
                 _SPEED_LABELS, _SPEED_COLORS, _SPEED_BINS,
                 _DIR_16, _DIR_8, _DIR_4, _MONTH_NAMES, _MONTH_COLORS,
@@ -1686,7 +1698,7 @@ def generate_combined_pptx_report(
         if not include_thermal_comfort:
             return  # Skip thermal comfort section if not requested
         try:
-            from modules.thermal_comfort_ppt import (
+            from .thermal_comfort_ppt import (
                 compute_psychrometric_simple,
                 compute_adaptive_comfort_simple,
                 classify_comfort_simple,
@@ -1950,7 +1962,7 @@ def generate_combined_pptx_report(
             return
 
         try:
-            from modules.rainfall_module import _fetch_noaa, _fetch_percentile_depth, _RUNOFF_SURFACES
+            from .rainfall_module import _fetch_noaa, _fetch_percentile_depth, _RUNOFF_SURFACES
         except ImportError:
             return
 

@@ -2,29 +2,120 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Form
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 import pandas as pd
 import io
 import os
+import asyncio
+import hashlib
+import subprocess
+import tempfile
 from datetime import datetime
+from functools import partial
 from typing import Optional
-import sys
 from fastapi.middleware.cors import CORSMiddleware
+from cachetools import TTLCache
 
-
-
-# Add the pages directory and modules path for imports
-current_dir = os.path.dirname(os.path.abspath(__file__))
-pages_dir = os.path.join(current_dir, 'pages')
-modules_dir = os.path.join(pages_dir, 'modules')
-
-sys.path.insert(0, pages_dir)
-sys.path.insert(0, modules_dir)
-
+from pages.modules.epw_parser import parse_epw
 from pages.modules.ppt_report import generate_pptx_report, generate_shading_pptx_report, generate_wind_pptx_report
 from pages.modules.thermal_comfort_ppt import generate_thermal_comfort_pptx_report
 from pages.modules.combined_report import generate_combined_pptx_report
 from pages.modules.rainfall_ppt import generate_rainfall_pptx_report
 from pages.modules.rainfall_module import STATIONS as RAINFALL_STATIONS
+
+
+class ErrorResponse(BaseModel):
+    error: str
+    detail: str
+
+
+_VALID_PERCENTILES = [85, 90, 95, 98]
+_VALID_SECTORS = [4, 8, 16]
+
+
+def _validate_n_sectors(n_sectors: int) -> int:
+    """Raise 400 if n_sectors is not one of 4, 8, 16."""
+    if n_sectors not in _VALID_SECTORS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "validation_error", "detail": f"n_sectors must be one of {_VALID_SECTORS}. Got: {n_sectors}"},
+        )
+    return n_sectors
+
+
+def _validate_combined_params(
+    rainfall_station_name: Optional[str],
+    rainfall_year: Optional[int],
+    rainfall_gi_percentile: int,
+) -> Optional[str]:
+    """Validate combined-analysis rainfall params. Returns station_id or None."""
+    if rainfall_station_name is None:
+        return None
+    if rainfall_station_name not in RAINFALL_STATIONS:
+        raise ValueError(
+            f"Unknown rainfall station '{rainfall_station_name}'. "
+            f"Valid options: {list(RAINFALL_STATIONS.keys())}"
+        )
+    if rainfall_year is None:
+        raise ValueError("rainfall_year is required when rainfall_station_name is provided.")
+    if rainfall_gi_percentile not in _VALID_PERCENTILES:
+        raise ValueError(
+            f"rainfall_gi_percentile must be one of {_VALID_PERCENTILES}. Got: {rainfall_gi_percentile}"
+        )
+    return RAINFALL_STATIONS[rainfall_station_name]
+
+
+# ── In-memory report cache (30 min TTL, max 64 entries) ──────────────────────
+_report_cache: TTLCache = TTLCache(maxsize=64, ttl=1800)
+
+
+def _make_cache_key(file_content: bytes, **params) -> str:
+    content_hash = hashlib.sha256(file_content).hexdigest()[:16]
+    param_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    return f"{content_hash}:{param_str}"
+
+
+# ── PDF conversion helper (requires LibreOffice on server) ───────────────────
+def _pptx_to_pdf(pptx_buffer: io.BytesIO) -> io.BytesIO:
+    """Convert PPTX bytes to PDF using LibreOffice headless.
+
+    Requires LibreOffice to be installed. Not available in the base Docker
+    image — add `apt-get install -y libreoffice` to the Dockerfile to enable.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pptx_path = os.path.join(tmpdir, "report.pptx")
+        with open(pptx_path, "wb") as f:
+            f.write(pptx_buffer.getvalue())
+        result = subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", tmpdir, pptx_path],
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"LibreOffice conversion failed: {result.stderr.decode()}")
+        pdf_path = pptx_path.replace(".pptx", ".pdf")
+        with open(pdf_path, "rb") as f:
+            buf = io.BytesIO(f.read())
+        buf.seek(0)
+        return buf
+
+
+_PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+def _stream_response(buffer: io.BytesIO, filename: str, output_format: str) -> StreamingResponse:
+    """Return a StreamingResponse, converting to PDF if requested."""
+    if output_format == "pdf":
+        buffer = _pptx_to_pdf(buffer)
+        media_type = "application/pdf"
+        filename = filename.replace(".pptx", ".pdf")
+    else:
+        media_type = _PPTX_MIME
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 app = FastAPI(
     title="Climate Zone Finder - PPT Report API",
@@ -40,100 +131,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def parse_epw_file(file_content: bytes) -> tuple[pd.DataFrame, dict]:
-    """Parse EPW file and extract weather data and metadata."""
-    try:
-        lines = file_content.decode('utf-8').split('\n')
-        
-        # Extract header information
-        header = lines[0].split(',')
-        metadata = {
-            "city": header[1].strip() if len(header) > 1 else "Unknown",
-            "state": header[2].strip() if len(header) > 2 else "",
-            "country": header[3].strip() if len(header) > 3 else "",
-            "latitude": float(header[6]) if len(header) > 6 else 0.0,
-            "longitude": float(header[7]) if len(header) > 7 else 0.0,
-            "timezone": float(header[8]) if len(header) > 8 else 0,
-            "elevation": float(header[9]) if len(header) > 9 else 0,
-        }
-        
-        # Parse weather data (skip header lines)
-        data_lines = [line for line in lines[8:] if line.strip()]
-        
-        # Standard EPW columns (34 columns)
-        standard_columns = [
-            'Year', 'Month', 'Day', 'Hour', 'Minute', 'Data Source Flag',
-            'dry_bulb_temperature', 'dew_point_temperature', 'relative_humidity',
-            'atmospheric_pressure', 'extraterrestrial_horizontal_radiation',
-            'extraterrestrial_direct_normal_radiation', 'horizontal_infrared_radiation_intensity',
-            'global_horizontal_irradiance', 'direct_normal_irradiance',
-            'diffuse_horizontal_irradiance', 'global_horizontal_illuminance',
-            'direct_normal_illuminance', 'diffuse_horizontal_illuminance',
-            'zenith_luminance', 'wind_direction', 'wind_speed',
-            'total_sky_cover', 'opaque_sky_cover', 'visibility',
-            'ceiling_height', 'present_weather_observation', 'present_weather_codes',
-            'precipitable_water', 'aerosol_optical_depth', 'snow_depth',
-            'days_since_last_snowfall', 'albedo', 'liquid_precipitation_depth',
-            'liquid_precipitation_quantity'
-        ]
-        
-        # Detect actual number of columns in the first data line
-        if data_lines:
-            sample_line = data_lines[0].split(',')
-            actual_columns = len(sample_line)
-        else:
-            actual_columns = len(standard_columns)
-        
-        # Use standard columns, or add extra columns if needed
-        if actual_columns > len(standard_columns):
-            columns = standard_columns + [f'extra_col_{i}' for i in range(actual_columns - len(standard_columns))]
-        else:
-            columns = standard_columns[:actual_columns]
-        
-        data = []
-        for line in data_lines:
-            values = line.split(',')
-            # Ensure we have the right number of columns
-            if len(values) >= len(columns):
-                row_data = [v.strip() for v in values[:len(columns)]]
-                data.append(row_data)
-            elif len(values) >= 34:  # Minimum requirement
-                row_data = [v.strip() for v in values[:34]]
-                data.append(row_data)
-        
-        if not data:
-            raise ValueError("No valid data rows found in EPW file")
-        
-        df = pd.DataFrame(data, columns=columns[:len(data[0])])
-        
-        # Convert to numeric types
-        numeric_cols = [
-            'Year', 'Month', 'Day', 'Hour', 'Minute',
-            'dry_bulb_temperature', 'dew_point_temperature', 'relative_humidity',
-            'atmospheric_pressure', 'global_horizontal_irradiance',
-            'direct_normal_irradiance', 'diffuse_horizontal_irradiance',
-            'wind_direction', 'wind_speed'
-        ]
-        
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Create datetime column
-        df['datetime'] = pd.to_datetime(
-            df[['Year', 'Month', 'Day', 'Hour', 'Minute']],
-            errors='coerce'
-        )
-        
-        # Add derived columns
-        df['month'] = df['Month'].astype(int)
-        df['hour'] = df['Hour'].astype(int)
-        df['doy'] = df['datetime'].dt.dayofyear
-        
-        return df, metadata
-        
-    except Exception as e:
-        raise ValueError(f"Error parsing EPW file: {str(e)}")
+def _parse_epw_bytes(file_content: bytes) -> tuple[pd.DataFrame, dict]:
+    """Thin wrapper: decode bytes and delegate to the shared parse_epw()."""
+    return parse_epw(file_content.decode("utf-8", errors="replace"))
 
 
 @app.get("/api/health")
@@ -142,179 +142,154 @@ def health_check():
     return {"status": "ok", "message": "Climate Zone Finder PPT Report API is running"}
 
 
-@app.post("/api/reports/climate-analysis")
+@app.post(
+    "/api/reports/climate-analysis",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def generate_climate_report(
     file: UploadFile = File(...),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     start_hour: int = Query(0, description="Start hour (0-23)"),
     end_hour: int = Query(23, description="End hour (0-23)"),
+    output_format: str = Query("pptx", description="Output format: 'pptx' (default) or 'pdf' (requires LibreOffice)"),
 ):
-    """
-    Generate a climate analysis PowerPoint report from an EPW file.
-    
-    Parameters:
-    - file: EPW weather file (required)
-    - start_date: Start analysis date (default: first day in file)
-    - end_date: End analysis date (default: last day in file)
-    - start_hour: Start hour of day (default: 0)
-    - end_hour: End hour of day (default: 23)
-    
-    Returns: PowerPoint report file
-    """
+    """Generate a climate analysis PowerPoint report from an EPW file."""
     try:
-        # Read uploaded file
         content = await file.read()
-        
-        # Parse EPW
-        df, metadata = parse_epw_file(content)
-        
+        df, metadata = _parse_epw_bytes(content)
         if df.empty:
             raise ValueError("EPW file is empty or could not be parsed")
-        
-        # Set date range
-        if start_date is None:
-            start_dt = df['datetime'].min().date()
-        else:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-        
-        if end_date is None:
-            end_dt = df['datetime'].max().date()
-        else:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
-        
-        # Generate report
-        pptx_buffer = generate_pptx_report(
-            df=df,
-            start_date=start_dt,
-            end_date=end_dt,
-            start_hour=start_hour,
-            end_hour=end_hour,
-            selected_parameter="dry_bulb_temperature",
-            metadata=metadata
+        start_dt = (
+            df['datetime'].min().date() if start_date is None
+            else datetime.strptime(start_date, "%Y-%m-%d").date()
         )
-        
+        end_dt = (
+            df['datetime'].max().date() if end_date is None
+            else datetime.strptime(end_date, "%Y-%m-%d").date()
+        )
+        cache_key = _make_cache_key(
+            content, start_date=str(start_dt), end_date=str(end_dt),
+            start_hour=start_hour, end_hour=end_hour,
+        )
+        if cache_key in _report_cache:
+            pptx_buffer = io.BytesIO(_report_cache[cache_key])
+        else:
+            loop = asyncio.get_event_loop()
+            pptx_buffer = await loop.run_in_executor(
+                None,
+                partial(
+                    generate_pptx_report,
+                    df=df, start_date=start_dt, end_date=end_dt,
+                    start_hour=start_hour, end_hour=end_hour,
+                    selected_parameter="dry_bulb_temperature",
+                    metadata=metadata,
+                ),
+            )
+            _report_cache[cache_key] = pptx_buffer.getvalue()
         city = metadata.get('city', 'Climate_Report')
         filename = f"Climate_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
-        
-        return StreamingResponse(
-            iter([pptx_buffer.getvalue()]),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-        
+        return _stream_response(pptx_buffer, filename, output_format)
+
+    except HTTPException:
+        raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"error": "validation_error", "detail": str(e)})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail={"error": "generation_failed", "detail": str(e)})
 
 
-@app.post("/api/reports/shading-analysis")
+@app.post(
+    "/api/reports/shading-analysis",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def generate_shading_report(
     file: UploadFile = File(...),
     temp_threshold: float = Query(28.0, description="Temperature threshold (°C)"),
     rad_threshold: float = Query(315.0, description="Radiation threshold (W/m²)"),
     design_cutoff_angle: float = Query(45.0, description="Design cutoff angle (°)"),
+    output_format: str = Query("pptx", description="Output format: 'pptx' (default) or 'pdf' (requires LibreOffice)"),
 ):
-    """
-    Generate a shading analysis PowerPoint report from an EPW file.
-    
-    Parameters:
-    - file: EPW weather file (required)
-    - temp_threshold: Temperature threshold for overheating (default: 28°C)
-    - rad_threshold: Radiation threshold for overheating (default: 315 W/m²)
-    - design_cutoff_angle: Vertical shading angle cutoff (default: 45°)
-    
-    Returns: PowerPoint report file
-    """
+    """Generate a shading analysis PowerPoint report from an EPW file."""
     try:
-        # Read uploaded file
         content = await file.read()
-        
-        # Parse EPW
-        df, metadata = parse_epw_file(content)
-        
+        df, metadata = _parse_epw_bytes(content)
         if df.empty:
             raise ValueError("EPW file is empty or could not be parsed")
-        
-        # Generate report
-        pptx_buffer = generate_shading_pptx_report(
-            df=df,
-            metadata=metadata,
-            temp_threshold=temp_threshold,
-            rad_threshold=rad_threshold,
-            lat=metadata.get('latitude'),
-            lon=metadata.get('longitude'),
-            tz_str=str(metadata.get('timezone', 'UTC')),
-            design_cutoff_angle=design_cutoff_angle
+        cache_key = _make_cache_key(
+            content, temp_threshold=temp_threshold,
+            rad_threshold=rad_threshold, design_cutoff_angle=design_cutoff_angle,
         )
-        
+        if cache_key in _report_cache:
+            pptx_buffer = io.BytesIO(_report_cache[cache_key])
+        else:
+            loop = asyncio.get_event_loop()
+            pptx_buffer = await loop.run_in_executor(
+                None,
+                partial(
+                    generate_shading_pptx_report,
+                    df=df, metadata=metadata,
+                    temp_threshold=temp_threshold, rad_threshold=rad_threshold,
+                    lat=metadata.get('latitude'), lon=metadata.get('longitude'),
+                    tz_str=str(metadata.get('timezone', 'UTC')),
+                    design_cutoff_angle=design_cutoff_angle,
+                ),
+            )
+            _report_cache[cache_key] = pptx_buffer.getvalue()
         city = metadata.get('city', 'Shading_Report')
         filename = f"Shading_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
-        
-        return StreamingResponse(
-            iter([pptx_buffer.getvalue()]),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-        
+        return _stream_response(pptx_buffer, filename, output_format)
+
+    except HTTPException:
+        raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"error": "validation_error", "detail": str(e)})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail={"error": "generation_failed", "detail": str(e)})
 
 
-@app.post("/api/reports/wind-analysis")
+@app.post(
+    "/api/reports/wind-analysis",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def generate_wind_report(
     file: UploadFile = File(...),
-    n_sectors: int = Form(16, description="Number of wind direction sectors (default: 16)"),
+    n_sectors: int = Form(16, description="Number of wind direction sectors (default: 16, options: 4, 8, 16)"),
+    output_format: str = Query("pptx", description="Output format: 'pptx' (default) or 'pdf' (requires LibreOffice)"),
 ):
-    """
-    Generate a wind analysis PowerPoint report from an EPW file.
-    
-    Parameters:
-    - file: EPW weather file (required)
-    - n_sectors: Number of compass sectors for wind rose (default: 16, options: 4, 8, 16)
-    
-    Returns: PowerPoint report file
-    """
+    """Generate a wind analysis PowerPoint report from an EPW file."""
+    _validate_n_sectors(n_sectors)
     try:
-        # Read uploaded file
         content = await file.read()
-        
-        # Parse EPW
-        df, metadata = parse_epw_file(content)
-        
+        df, metadata = _parse_epw_bytes(content)
         if df.empty:
             raise ValueError("EPW file is empty or could not be parsed")
-        
-        # Validate n_sectors
-        if n_sectors not in [4, 8, 16]:
-            n_sectors = 16
-        
-        # Generate report
-        pptx_buffer = generate_wind_pptx_report(
-            df=df,
-            metadata=metadata,
-            n_sectors=n_sectors
-        )
-        
+        cache_key = _make_cache_key(content, n_sectors=n_sectors)
+        if cache_key in _report_cache:
+            pptx_buffer = io.BytesIO(_report_cache[cache_key])
+        else:
+            loop = asyncio.get_event_loop()
+            pptx_buffer = await loop.run_in_executor(
+                None,
+                partial(generate_wind_pptx_report, df=df, metadata=metadata, n_sectors=n_sectors),
+            )
+            _report_cache[cache_key] = pptx_buffer.getvalue()
         city = metadata.get('city', 'Wind_Report')
         filename = f"Wind_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
-        
-        return StreamingResponse(
-            iter([pptx_buffer.getvalue()]),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-        
+        return _stream_response(pptx_buffer, filename, output_format)
+
+    except HTTPException:
+        raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"error": "validation_error", "detail": str(e)})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail={"error": "generation_failed", "detail": str(e)})
 
 
-@app.post("/api/reports/combined-analysis")
+@app.post(
+    "/api/reports/combined-analysis",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def generate_combined_report(
     file: UploadFile = File(...),
     start_date: Optional[str] = Form(None, description="Start date (YYYY-MM-DD)"),
@@ -325,6 +300,10 @@ async def generate_combined_report(
     rad_threshold: float = Form(315.0, description="Radiation threshold (W/m²), default: 315.0"),
     design_cutoff_angle: float = Form(45.0, description="Design cutoff angle (°), default: 45.0"),
     n_sectors: int = Form(16, description="Number of wind direction sectors (default: 16, options: 4, 8, 16)"),
+    # ── Branding (cover slide) ───────────────────────────────────────────────
+    project_name: Optional[str] = Form(None, description="Project name shown on cover slide"),
+    client_name: Optional[str] = Form(None, description="Client name shown on cover slide"),
+    report_date: Optional[str] = Form(None, description="Report date on cover (default: today, format: DD Month YYYY)"),
     # ── Optional Rainfall section ────────────────────────────────────────────
     rainfall_station_name: Optional[str] = Form(None, description=(
         "Rainfall station name. Call GET /api/rainfall/stations for valid values. "
@@ -338,176 +317,127 @@ async def generate_combined_report(
     rainfall_water_area_m2:  float = Form(0.0, ge=0, description="Waterbody area m² (default: 0)"),
     rainfall_gi_percentile:  int   = Form(95,  description="GI percentile baseline. Valid: 85, 90, 95, 98 (default: 95)"),
     rainfall_gi_start_year:  int   = Form(1990, ge=1950, le=2023, description="GI historical start year (default: 1990)"),
+    output_format: str = Query("pptx", description="Output format: 'pptx' (default) or 'pdf' (requires LibreOffice)"),
 ):
     """
-    Generate a combined Climate & Shading & Wind & Thermal Comfort Analysis PowerPoint report from an EPW file.
-    
-    This endpoint generates a comprehensive report with:
-    - Cover slide with location info
-    - Assumptions & Analysis Parameters slide (customizable thresholds)
-    - Climate Analysis: Dry Bulb Temperature, Relative Humidity, Sun Path
-    - Shading Analysis: Thermal/Radiation Matrix, Sun Path Shading, Orientation Analysis, Shading Masks
-    - Wind Analysis: Wind Rose, Speed & Direction Heatmaps, Wind Speed Distribution, Climate Bubble Chart, Wind Statistics
-    - Thermal Comfort Analysis: Comfort Heatmap, Psychrometric Chart, Design Strategies, Degree Hours, Adaptive Comfort, Performance Summary, Design Recommendations
-    - Rainfall Analysis (optional): Monthly Rainfall, Rainy Days, Rainwater Harvesting Potential, Surface Runoff — included when rainfall_station_name + rainfall_year are provided
-    - Annexure with disclaimer and acknowledgements
+    Generate a combined Climate & Shading & Wind & Thermal Comfort (+ optional Rainfall) report.
 
-    Parameters:
-    - file: EPW weather file (required)
-    - start_date: Start analysis date in YYYY-MM-DD format (optional, default: first day in file)
-    - end_date: End analysis date in YYYY-MM-DD format (optional, default: last day in file)
-    - start_hour: Start hour of analysis (0-23, default: 0 - full day)
-    - end_hour: End hour of analysis (0-23, default: 23 - full day)
-    - temp_threshold: Temperature threshold for overheating detection (°C, default: 28.0)
-    - rad_threshold: Solar radiation threshold for shading analysis (W/m², default: 315.0)
-    - design_cutoff_angle: Vertical design angle for shading calculations (°, default: 45.0)
-    - n_sectors: Number of compass sectors for wind rose (default: 16, options: 4, 8, 16)
-    - rainfall_station_name: NOAA station name — omit to skip rainfall section (call GET /api/rainfall/stations for valid values)
-    - rainfall_year: Year of NOAA rainfall data — required if rainfall_station_name is set
-    - rainfall_heavy_threshold: mm/day threshold for heavy rain class (default: 50.0)
-    - Note: rainfall month range is derived from start_date/end_date automatically
-    - rainfall_roof/paved/green/water_area_m2: Surface areas for runoff calculation (default: 0)
-    - rainfall_gi_percentile: GI baseline percentile — must be 85, 90, 95, or 98 (default: 95)
-    - rainfall_gi_start_year: Earliest year for GI historical baseline (default: 1990)
-
-    Returns: PowerPoint report file with combined climate, shading, wind, thermal comfort, and optional rainfall analysis
+    Optional branding parameters (project_name, client_name, report_date) are rendered on the
+    cover slide. PDF conversion requires LibreOffice installed on the server.
     """
+    _validate_n_sectors(n_sectors)
     try:
-        # Read uploaded file
         content = await file.read()
-        
-        # Parse EPW
-        df, metadata = parse_epw_file(content)
-        
+        df, metadata = _parse_epw_bytes(content)
         if df.empty:
             raise ValueError("EPW file is empty or could not be parsed")
-        
-        # Set date range - default to full year (Jan 1 - Dec 31)
+
         _year = df["datetime"].dt.year.iloc[0] if not df.empty else 2024
-        
-        if start_date is None:
-            start_dt = pd.to_datetime(f"{_year}-01-01").date()
-        else:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-        
-        if end_date is None:
-            end_dt = pd.to_datetime(f"{_year}-12-31").date()
-        else:
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
-
-        # Validate n_sectors
-        if n_sectors not in [4, 8, 16]:
-            n_sectors = 16
-
-        # Validate rainfall params (optional section)
-        _rain_sid = None
-        if rainfall_station_name is not None:
-            if rainfall_station_name not in RAINFALL_STATIONS:
-                raise ValueError(
-                    f"Unknown rainfall station '{rainfall_station_name}'. "
-                    f"Valid options: {list(RAINFALL_STATIONS.keys())}"
-                )
-            if rainfall_year is None:
-                raise ValueError("rainfall_year is required when rainfall_station_name is provided.")
-            _VALID_PERCENTILES = [85, 90, 95, 98]
-            if rainfall_gi_percentile not in _VALID_PERCENTILES:
-                raise ValueError(f"rainfall_gi_percentile must be one of {_VALID_PERCENTILES}. Got: {rainfall_gi_percentile}")
-            _rain_sid = RAINFALL_STATIONS[rainfall_station_name]
-
-        # Generate combined report
-        pptx_buffer = generate_combined_pptx_report(
-            df=df,
-            start_date=start_dt,
-            end_date=end_dt,
-            start_hour=start_hour,
-            end_hour=end_hour,
-            selected_parameter="combined",
-            metadata=metadata,
-            temp_threshold=temp_threshold,
-            rad_threshold=rad_threshold,
-            n_sectors=n_sectors,
-            design_cutoff_angle=design_cutoff_angle,
-            include_thermal_comfort=True,
-            rainfall_station_name=rainfall_station_name,
-            rainfall_station_id=_rain_sid,
-            rainfall_year=rainfall_year,
-            rainfall_start_month=start_dt.month,
-            rainfall_end_month=end_dt.month,
-            rainfall_heavy_threshold=rainfall_heavy_threshold,
-            rainfall_surface_areas={
-                "roof":  rainfall_roof_area_m2,
-                "paved": rainfall_paved_area_m2,
-                "green": rainfall_green_area_m2,
-                "water": rainfall_water_area_m2,
-            },
-            rainfall_gi_percentile=rainfall_gi_percentile,
-            rainfall_gi_start_year=rainfall_gi_start_year,
+        start_dt = (
+            pd.to_datetime(f"{_year}-01-01").date() if start_date is None
+            else datetime.strptime(start_date, "%Y-%m-%d").date()
         )
-        
+        end_dt = (
+            pd.to_datetime(f"{_year}-12-31").date() if end_date is None
+            else datetime.strptime(end_date, "%Y-%m-%d").date()
+        )
+
+        _rain_sid = _validate_combined_params(
+            rainfall_station_name, rainfall_year, rainfall_gi_percentile
+        )
+
+        branding = {
+            "project_name": project_name,
+            "client_name": client_name,
+            "report_date": report_date,
+        }
+
+        cache_key = _make_cache_key(
+            content,
+            start_date=str(start_dt), end_date=str(end_dt),
+            start_hour=start_hour, end_hour=end_hour,
+            temp_threshold=temp_threshold, rad_threshold=rad_threshold,
+            design_cutoff_angle=design_cutoff_angle, n_sectors=n_sectors,
+            rainfall_station_name=str(rainfall_station_name), rainfall_year=str(rainfall_year),
+            rainfall_heavy_threshold=rainfall_heavy_threshold,
+            rainfall_gi_percentile=rainfall_gi_percentile,
+            project_name=str(project_name), client_name=str(client_name),
+        )
+        if cache_key in _report_cache:
+            pptx_buffer = io.BytesIO(_report_cache[cache_key])
+        else:
+            loop = asyncio.get_event_loop()
+            pptx_buffer = await loop.run_in_executor(
+                None,
+                partial(
+                    generate_combined_pptx_report,
+                    df=df, start_date=start_dt, end_date=end_dt,
+                    start_hour=start_hour, end_hour=end_hour,
+                    selected_parameter="combined", metadata=metadata,
+                    temp_threshold=temp_threshold, rad_threshold=rad_threshold,
+                    n_sectors=n_sectors, design_cutoff_angle=design_cutoff_angle,
+                    include_thermal_comfort=True,
+                    rainfall_station_name=rainfall_station_name,
+                    rainfall_station_id=_rain_sid, rainfall_year=rainfall_year,
+                    rainfall_start_month=start_dt.month, rainfall_end_month=end_dt.month,
+                    rainfall_heavy_threshold=rainfall_heavy_threshold,
+                    rainfall_surface_areas={
+                        "roof":  rainfall_roof_area_m2, "paved": rainfall_paved_area_m2,
+                        "green": rainfall_green_area_m2, "water": rainfall_water_area_m2,
+                    },
+                    rainfall_gi_percentile=rainfall_gi_percentile,
+                    rainfall_gi_start_year=rainfall_gi_start_year,
+                    branding=branding,
+                ),
+            )
+            _report_cache[cache_key] = pptx_buffer.getvalue()
+
         city = metadata.get('city', 'Combined_Report')
         filename = f"Climate_Shading_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
-        
-        return StreamingResponse(
-            iter([pptx_buffer.getvalue()]),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-        
+        return _stream_response(pptx_buffer, filename, output_format)
+
+    except HTTPException:
+        raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"error": "validation_error", "detail": str(e)})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail={"error": "generation_failed", "detail": str(e)})
 
 
-@app.post("/api/reports/thermal-comfort")
+@app.post(
+    "/api/reports/thermal-comfort",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def generate_thermal_comfort_report(
     file: UploadFile = File(...),
+    output_format: str = Query("pptx", description="Output format: 'pptx' (default) or 'pdf' (requires LibreOffice)"),
 ):
-    """
-    Generate a thermal comfort analysis PowerPoint report from an EPW file.
-    
-    Includes:
-    - Comfort heatmap (hour × month)
-    - Design strategy opportunities
-    - Monthly cooling and heating degree hours
-    - ASHRAE 55 adaptive comfort analysis
-    - Thermal comfort performance summary
-    - Design recommendations
-    
-    Parameters:
-    - file: EPW weather file (required)
-    
-    Returns: PowerPoint report file
-    """
+    """Generate a thermal comfort analysis PowerPoint report from an EPW file."""
     try:
-        # Read uploaded file
         content = await file.read()
-        
-        # Parse EPW
-        df, metadata = parse_epw_file(content)
-        
+        df, metadata = _parse_epw_bytes(content)
         if df.empty:
             raise ValueError("EPW file is empty or could not be parsed")
-        
-        # Generate thermal comfort report
-        pptx_buffer = generate_thermal_comfort_pptx_report(
-            df=df,
-            metadata=metadata
-        )
-        
+        cache_key = _make_cache_key(content)
+        if cache_key in _report_cache:
+            pptx_buffer = io.BytesIO(_report_cache[cache_key])
+        else:
+            loop = asyncio.get_event_loop()
+            pptx_buffer = await loop.run_in_executor(
+                None,
+                partial(generate_thermal_comfort_pptx_report, df=df, metadata=metadata),
+            )
+            _report_cache[cache_key] = pptx_buffer.getvalue()
         city = metadata.get('city', 'Thermal_Comfort_Report')
         filename = f"Thermal_Comfort_Analysis_{city}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
-        
-        return StreamingResponse(
-            iter([pptx_buffer.getvalue()]),
-            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-        
+        return _stream_response(pptx_buffer, filename, output_format)
+
+    except HTTPException:
+        raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"error": "validation_error", "detail": str(e)})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail={"error": "generation_failed", "detail": str(e)})
 
 
 @app.get("/api/rainfall/stations")
@@ -516,7 +446,10 @@ def list_rainfall_stations():
     return {"stations": list(RAINFALL_STATIONS.keys())}
 
 
-@app.post("/api/reports/rainfall-analysis")
+@app.post(
+    "/api/reports/rainfall-analysis",
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+)
 async def generate_rainfall_report(
     # ── Station & period ─────────────────────────────────────────────────────
     station_name: str = Form(..., description=(
@@ -549,6 +482,7 @@ async def generate_rainfall_report(
         "Earliest year of historical NOAA data used to calculate the percentile baseline. "
         "Default: 1990"
     )),
+    output_format: str = Query("pptx", description="Output format: 'pptx' (default) or 'pdf' (requires LibreOffice)"),
 ):
     """
     Generate a Rainfall Analysis PowerPoint report using live NOAA daily-summaries data.
@@ -579,27 +513,24 @@ async def generate_rainfall_report(
     | Green/Lawn  | 0.10 |
     | Waterbody   | 0.90 |
     """
-    # Validate station
+    # Validate inputs
     if station_name not in RAINFALL_STATIONS:
         raise HTTPException(
             status_code=400,
-            detail=(
+            detail={"error": "validation_error", "detail": (
                 f"Unknown station '{station_name}'. "
                 f"Valid options: {list(RAINFALL_STATIONS.keys())}"
-            ),
+            )},
         )
-
     if start_month > end_month:
         raise HTTPException(
             status_code=400,
-            detail=f"start_month ({start_month}) must be ≤ end_month ({end_month}).",
+            detail={"error": "validation_error", "detail": f"start_month ({start_month}) must be ≤ end_month ({end_month})."},
         )
-
-    _VALID_PERCENTILES = [85, 90, 95, 98]
     if gi_percentile not in _VALID_PERCENTILES:
         raise HTTPException(
             status_code=400,
-            detail=f"gi_percentile must be one of {_VALID_PERCENTILES}. Got: {gi_percentile}",
+            detail={"error": "validation_error", "detail": f"gi_percentile must be one of {_VALID_PERCENTILES}. Got: {gi_percentile}"},
         )
 
     station_id = RAINFALL_STATIONS[station_name]
@@ -611,30 +542,39 @@ async def generate_rainfall_report(
     }
 
     try:
-        pptx_buffer = generate_rainfall_pptx_report(
-            station_name         = station_name,
-            station_id           = station_id,
-            year                 = year,
-            start_month          = start_month,
-            end_month            = end_month,
-            heavy_rain_threshold = heavy_rain_threshold,
-            surface_areas        = surface_areas,
-            gi_percentile        = gi_percentile,
-            gi_start_year        = gi_start_year,
+        cache_key = _make_cache_key(
+            b"",
+            station_name=station_name, year=year,
+            start_month=start_month, end_month=end_month,
+            heavy_rain_threshold=heavy_rain_threshold,
+            gi_percentile=gi_percentile, gi_start_year=gi_start_year,
         )
+        if cache_key in _report_cache:
+            pptx_buffer = io.BytesIO(_report_cache[cache_key])
+        else:
+            loop = asyncio.get_event_loop()
+            pptx_buffer = await loop.run_in_executor(
+                None,
+                partial(
+                    generate_rainfall_pptx_report,
+                    station_name=station_name, station_id=station_id,
+                    year=year, start_month=start_month, end_month=end_month,
+                    heavy_rain_threshold=heavy_rain_threshold,
+                    surface_areas=surface_areas,
+                    gi_percentile=gi_percentile, gi_start_year=gi_start_year,
+                ),
+            )
+            _report_cache[cache_key] = pptx_buffer.getvalue()
+    except HTTPException:
+        raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"error": "validation_error", "detail": str(e)})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail={"error": "generation_failed", "detail": str(e)})
 
     safe_station = station_name.replace(" ", "_").replace("(", "").replace(")", "").replace("\\", "_")
     filename = f"Rainfall_Analysis_{safe_station}_{year}.pptx"
-
-    return StreamingResponse(
-        iter([pptx_buffer.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
+    return _stream_response(pptx_buffer, filename, output_format)
 
 
 @app.get("/api/docs")
@@ -777,6 +717,7 @@ def api_documentation():
 
 if __name__ == "__main__":
     import uvicorn
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     print("Starting Climate Zone Finder PPT Report API...")
     print("Documentation available at: http://localhost:8001/api/docs")
     uvicorn.run(app, host="0.0.0.0", port=8001)

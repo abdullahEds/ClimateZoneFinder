@@ -1,0 +1,5 @@
+{
+  "_comment": "Add custom NOAA stations here. Format: { \"Station Name\": \"NOAA_STATION_ID\" }. Keys starting with '_' are ignored.",
+  "Dubai (DXB)": "AE000041196",
+  "Abu Dhabi": "AE000041217"
+}

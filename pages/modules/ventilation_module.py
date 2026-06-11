@@ -27,6 +27,7 @@ Architecture notes
 
 import re
 import numpy as np
+from typing import Optional
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -982,7 +983,7 @@ def plot_facade_pair_table(cross: dict) -> go.Figure:
 
 def render(
     epw_df: pd.DataFrame,
-    months: list        = None,
+    months: Optional[list[int]] = None,
     wind_threshold: float = 1.5,
     comfort_min: float  = 24.0,
     comfort_max: float  = 26.0,

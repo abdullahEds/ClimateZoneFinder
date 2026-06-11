@@ -263,7 +263,14 @@ with col_left:
 
     uploaded = st.file_uploader("", type=["epw"], label_visibility="collapsed", width=300)
 
-    # If user selected an EPW from the main page, fetch it into `uploaded`
+    # Show banner when EPW was auto-loaded from a URL ?location= parameter
+    if st.session_state.get("epw_auto_location") and st.session_state.get("epw_url"):
+        st.info(
+            f"EPW file auto-loaded for **{st.session_state['epw_auto_location']}**. "
+            "Upload a different file above to override."
+        )
+
+    # If user selected an EPW from the main page (or auto-loaded via URL param), fetch it
     if uploaded is None and st.session_state.get("epw_url"):
         try:
             epw_url = st.session_state.get("epw_url")

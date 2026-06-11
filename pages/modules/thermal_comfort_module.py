@@ -37,20 +37,29 @@ Strategy mapping (applied in priority order per hour):
     6. otherwise                                            → Comfortable
 """
 
+from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
+from .config import (
+    ASHRAE_ALPHA, ASHRAE_T_PMA_MIN, ASHRAE_T_PMA_MAX,
+    ASHRAE_COMFORT_NEUTRAL_A, ASHRAE_COMFORT_NEUTRAL_B,
+    COMFORT_BAND_80_PCT, COMFORT_BAND_90_PCT,
+    CDH_BASE_TEMP, HDH_BASE_TEMP,
+    NV_MIN_WIND_SPEED, NV_COOL_DBT_THRESHOLD,
+    NIGHT_FLUSH_DIURNAL_MIN, MECH_COOLING_RH_THRESHOLD,
+)
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _P_ATM = 101_325.0          # Standard atmospheric pressure [Pa]
-_ALPHA  = 0.9               # ASHRAE 55 exponential running mean coefficient
-_CDH_BASE = 24.0            # Cooling degree-hours base temperature [°C]
-_HDH_BASE = 18.0            # Heating degree-hours base temperature [°C]
-_WIND_NV_THRESHOLD = 1.0    # Minimum wind speed for natural ventilation [m/s]
-_DIURNAL_MASS_THRESHOLD = 8.0  # Diurnal range threshold for thermal mass strategy [°C]
+_ALPHA  = ASHRAE_ALPHA
+_CDH_BASE = CDH_BASE_TEMP
+_HDH_BASE = HDH_BASE_TEMP
+_WIND_NV_THRESHOLD = NV_MIN_WIND_SPEED
+_DIURNAL_MASS_THRESHOLD = NIGHT_FLUSH_DIURNAL_MIN
 
 _MONTH_NAMES = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -190,14 +199,14 @@ def compute_adaptive_comfort(df: pd.DataFrame) -> pd.DataFrame:
     out["t_pma"] = out["doy"].map(pma_series)
 
     # Comfort temperature
-    out["t_comf"]       = 0.31 * out["t_pma"] + 17.8
-    out["t_comf_80_lo"] = out["t_comf"] - 3.5
-    out["t_comf_80_hi"] = out["t_comf"] + 3.5
-    out["t_comf_90_lo"] = out["t_comf"] - 2.5
-    out["t_comf_90_hi"] = out["t_comf"] + 2.5
+    out["t_comf"]       = ASHRAE_COMFORT_NEUTRAL_A * out["t_pma"] + ASHRAE_COMFORT_NEUTRAL_B
+    out["t_comf_80_lo"] = out["t_comf"] - COMFORT_BAND_80_PCT
+    out["t_comf_80_hi"] = out["t_comf"] + COMFORT_BAND_80_PCT
+    out["t_comf_90_lo"] = out["t_comf"] - COMFORT_BAND_90_PCT
+    out["t_comf_90_hi"] = out["t_comf"] + COMFORT_BAND_90_PCT
 
-    # Applicability (ASHRAE 55 limits prevailing mean to 10–33.5 °C)
-    out["adaptive_applicable"] = out["t_pma"].between(10.0, 33.5)
+    # Applicability (ASHRAE 55 limits prevailing mean to valid range)
+    out["adaptive_applicable"] = out["t_pma"].between(ASHRAE_T_PMA_MIN, ASHRAE_T_PMA_MAX)
 
     # Whether current hour is within bands
     out["in_80"] = (T >= out["t_comf_80_lo"]) & (T <= out["t_comf_80_hi"]) & out["adaptive_applicable"]
@@ -818,14 +827,14 @@ def _render_adaptive_comfort_chart(df: pd.DataFrame, months: list) -> None:
         appl["t_pma"].max() + 1,
         200,
     )
-    comf_line  = 0.31 * sorted_pma + 17.8
+    comf_line  = ASHRAE_COMFORT_NEUTRAL_A * sorted_pma + ASHRAE_COMFORT_NEUTRAL_B
 
     fig = go.Figure()
 
     # 80 % band
     fig.add_trace(go.Scatter(
         x=np.concatenate([sorted_pma, sorted_pma[::-1]]),
-        y=np.concatenate([comf_line + 3.5, (comf_line - 3.5)[::-1]]),
+        y=np.concatenate([comf_line + COMFORT_BAND_80_PCT, (comf_line - COMFORT_BAND_80_PCT)[::-1]]),
         fill="toself", fillcolor="rgba(46,204,113,0.12)",
         line=dict(color="rgba(46,204,113,0.5)", width=1),
         name="80% Acceptability Band",
@@ -834,7 +843,7 @@ def _render_adaptive_comfort_chart(df: pd.DataFrame, months: list) -> None:
     # 90 % band
     fig.add_trace(go.Scatter(
         x=np.concatenate([sorted_pma, sorted_pma[::-1]]),
-        y=np.concatenate([comf_line + 2.5, (comf_line - 2.5)[::-1]]),
+        y=np.concatenate([comf_line + COMFORT_BAND_90_PCT, (comf_line - COMFORT_BAND_90_PCT)[::-1]]),
         fill="toself", fillcolor="rgba(46,204,113,0.22)",
         line=dict(color="rgba(46,204,113,0.8)", width=1.5),
         name="90% Acceptability Band",
@@ -1098,7 +1107,7 @@ def _kpi(label: str, value: str, meta: str = "") -> str:
 
 def render(
     df: pd.DataFrame,
-    months: list = None,
+    months: Optional[list[int]] = None,
     comfort_model: str = "Both",
     air_speed_adjust: bool = False,
     start_hour: int = 0,

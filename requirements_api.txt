@@ -11,3 +11,7 @@ numpy
 matplotlib
 plotly
 requests
+httpx
+cachetools
+pytest
+pytest-asyncio

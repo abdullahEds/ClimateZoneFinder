@@ -1,3 +1,4 @@
+from typing import Optional
 import streamlit as st
 
 """Wind Analysis module – replicates the Wind tab of Berkeley CBE Clima tool.
@@ -70,7 +71,7 @@ _MONTH_NAMES = [
 
 def prepare_wind_data(
     df: pd.DataFrame,
-    months: list = None,
+    months: Optional[list[int]] = None,
     n_sectors: int = 16,
 ) -> pd.DataFrame:
     """Prepare and filter EPW wind data for visualisation.
@@ -175,7 +176,7 @@ def compute_wind_rose(
     wdf: pd.DataFrame,
     n_sectors: int = 16,
     exclude_calm: bool = False,
-) -> tuple:
+) -> tuple[pd.DataFrame, float]:
     """Build sector × speed-bin frequency table for the wind rose.
 
     Calm winds are always excluded from directional bars.
@@ -761,7 +762,7 @@ def _kpi_card(label: str, value: str, color: str) -> str:
 
 def render_wind_analysis(
     epw_df: pd.DataFrame,
-    months: list = None,
+    months: Optional[list[int]] = None,
     n_sectors: int = 16,
     exclude_calm: bool = False,
 ) -> None:

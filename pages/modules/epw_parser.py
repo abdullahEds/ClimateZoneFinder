@@ -2,10 +2,11 @@
 
 import io
 import re
+from typing import Optional, Union
 import pandas as pd
 
 
-def convert_epw_timezone(tz_offset):
+def convert_epw_timezone(tz_offset: Union[str, float, int]) -> str:
     """Convert EPW numeric timezone to valid pytz timezone string."""
     tz_map = {
         5.5: "Asia/Kolkata",
@@ -26,37 +27,51 @@ def convert_epw_timezone(tz_offset):
     return "UTC"
 
 
-def parse_epw(epw_text: str) -> tuple:
+def parse_epw(epw_text: str) -> tuple[pd.DataFrame, dict]:
     """Parse EPW formatted text and return a tuple of (DataFrame, metadata).
 
-    Returns:
-        tuple: (df, metadata) where df has datetime, dry_bulb_temperature,
-               relative_humidity, hour and metadata contains latitude,
-               longitude, timezone.
+    Returns a DataFrame with all columns needed by both the Streamlit app and
+    the FastAPI report endpoints:
+        datetime, dry_bulb_temperature, relative_humidity,
+        direct_normal_irradiance, diffuse_horizontal_irradiance,
+        global_horizontal_irradiance, wind_direction, wind_speed, hour,
+        dew_point_temperature, atmospheric_pressure, liquid_precipitation_depth,
+        doy, month, Year, Month, Day, Minute.
+
+    Metadata dict contains: latitude, longitude, timezone, city, location,
+        state, country, elevation.
     """
     lines = [ln.strip() for ln in epw_text.splitlines() if ln.strip() != ""]
 
     # Extract metadata from header (first line)
+    # EPW header: LOCATION,CITY,STATE,COUNTRY,DATA SOURCE,WMO #,LAT,LON,TZ,ELEV
     metadata = {
         "latitude": None,
         "longitude": None,
         "timezone": "UTC",
         "city": None,
         "location": None,
+        "state": None,
+        "country": None,
+        "elevation": None,
     }
     if len(lines) > 0:
         header = lines[0].split(",")
         try:
-            # EPW header format:
-            # LOCATION,CITY,STATE,COUNTRY,DATA SOURCE,WMO #,LAT,LON,TZ,ELEV
             if len(header) >= 2:
                 metadata["location"] = header[0].strip()
                 metadata["city"] = header[1].strip()
+            if len(header) >= 3:
+                metadata["state"] = header[2].strip()
+            if len(header) >= 4:
+                metadata["country"] = header[3].strip()
             if len(header) >= 8:
                 metadata["latitude"] = float(header[6].strip())
                 metadata["longitude"] = float(header[7].strip())
             if len(header) >= 9:
                 metadata["timezone"] = convert_epw_timezone(header[8].strip())
+            if len(header) >= 10:
+                metadata["elevation"] = float(header[9].strip())
         except (ValueError, IndexError, TypeError):
             pass
 
@@ -75,10 +90,13 @@ def parse_epw(epw_text: str) -> tuple:
 
     # EPW standard column indices (0-based):
     # 0=year, 1=month, 2=day, 3=hour, 4=minute, 5=data source,
-    # 6=dry bulb (°C), 7=dew point, 8=relative humidity (%),
+    # 6=dry_bulb (°C), 7=dew_point (°C), 8=relative_humidity (%),
+    # 9=atmospheric_pressure (Pa),
     # 13=global_horizontal_irradiance (Wh/m²),
     # 14=direct_normal_irradiance (Wh/m²),
-    # 15=diffuse_horizontal_irradiance (Wh/m²)
+    # 15=diffuse_horizontal_irradiance (Wh/m²),
+    # 20=wind_direction (°), 21=wind_speed (m/s),
+    # 33=liquid_precipitation_depth (mm)
     col_map = {
         "year": 0,
         "month": 1,
@@ -86,17 +104,19 @@ def parse_epw(epw_text: str) -> tuple:
         "hour": 3,
         "minute": 4,
         "dry_bulb_temperature": 6,
+        "dew_point_temperature": 7,
         "relative_humidity": 8,
+        "atmospheric_pressure": 9,
+        "global_horizontal_irradiance": 13,
         "direct_normal_irradiance": 14,
         "diffuse_horizontal_irradiance": 15,
-        # EPW field 20 = wind direction (degrees from North, clockwise)
-        # EPW field 21 = wind speed (m/s)
         "wind_direction": 20,
         "wind_speed": 21,
+        "liquid_precipitation_depth": 33,
     }
 
     max_needed = max(col_map.values())
-    if df_raw.shape[1] <= max_needed:
+    if df_raw.shape[1] <= max(col_map["wind_speed"], col_map["wind_direction"]):
         raise ValueError("EPW data appears to have insufficient columns")
 
     df = pd.DataFrame()
@@ -112,8 +132,14 @@ def parse_epw(epw_text: str) -> tuple:
     df["dry_bulb_temperature"] = pd.to_numeric(
         df_raw.iloc[:, col_map["dry_bulb_temperature"]], errors="coerce"
     )
+    df["dew_point_temperature"] = pd.to_numeric(
+        df_raw.iloc[:, col_map["dew_point_temperature"]], errors="coerce"
+    )
     df["relative_humidity"] = pd.to_numeric(
         df_raw.iloc[:, col_map["relative_humidity"]], errors="coerce"
+    )
+    df["atmospheric_pressure"] = pd.to_numeric(
+        df_raw.iloc[:, col_map["atmospheric_pressure"]], errors="coerce"
     )
     df["direct_normal_irradiance"] = pd.to_numeric(
         df_raw.iloc[:, col_map["direct_normal_irradiance"]], errors="coerce"
@@ -122,7 +148,7 @@ def parse_epw(epw_text: str) -> tuple:
         df_raw.iloc[:, col_map["diffuse_horizontal_irradiance"]], errors="coerce"
     ).fillna(0)
     df["global_horizontal_irradiance"] = pd.to_numeric(
-        df_raw.iloc[:, 13], errors="coerce"
+        df_raw.iloc[:, col_map["global_horizontal_irradiance"]], errors="coerce"
     ).fillna(0)
     df["wind_direction"] = pd.to_numeric(
         df_raw.iloc[:, col_map["wind_direction"]], errors="coerce"
@@ -130,6 +156,14 @@ def parse_epw(epw_text: str) -> tuple:
     df["wind_speed"] = pd.to_numeric(
         df_raw.iloc[:, col_map["wind_speed"]], errors="coerce"
     ).fillna(0.0)
+
+    # liquid_precipitation_depth is column 33 — present in most EPW files
+    if df_raw.shape[1] > col_map["liquid_precipitation_depth"]:
+        df["liquid_precipitation_depth"] = pd.to_numeric(
+            df_raw.iloc[:, col_map["liquid_precipitation_depth"]], errors="coerce"
+        ).fillna(0.0)
+    else:
+        df["liquid_precipitation_depth"] = 0.0
 
     df["datetime"] = pd.to_datetime(
         dict(
@@ -143,17 +177,36 @@ def parse_epw(epw_text: str) -> tuple:
     )
 
     df = df.dropna(subset=["datetime"]).reset_index(drop=True)
+
+    # Derived columns used by the API parser
+    df["doy"] = df["datetime"].dt.dayofyear
+    # Aliased uppercase columns for API compatibility
+    df["Year"] = df["year"].astype(int)
+    df["Month"] = df["month"].astype(int)
+    df["Day"] = df["day"].astype(int)
+    df["Minute"] = df["minute"].astype(int)
+
     return (
         df[[
             "datetime",
             "dry_bulb_temperature",
+            "dew_point_temperature",
             "relative_humidity",
+            "atmospheric_pressure",
             "direct_normal_irradiance",
             "diffuse_horizontal_irradiance",
             "global_horizontal_irradiance",
             "wind_direction",
             "wind_speed",
+            "liquid_precipitation_depth",
             "hour",
+            "doy",
+            "Year",
+            "Month",
+            "Day",
+            "Minute",
+            # lowercase aliases kept for Streamlit consumers
+            "month",
         ]],
         metadata,
     )
