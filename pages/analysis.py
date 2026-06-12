@@ -32,7 +32,7 @@ from modules.ppt_report import generate_pptx_report, generate_shading_pptx_repor
 from modules.combined_report import generate_combined_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
-from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module, rainfall_module
+from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module, rainfall_module, solar_pv_module
 
 # ─── Page configuration ───────────────────────────────────────────────────────
 
@@ -298,13 +298,13 @@ with col_left:
     st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
-        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort", "Rainfall"],
+        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort", "Rainfall", "Solar PV"],
         label_visibility="collapsed",
         key="parameter_selector",
         width=300,
     )
 
-if uploaded is None and selected_parameter != "Rainfall":
+if uploaded is None and selected_parameter not in ("Rainfall", "Solar PV"):
     with col_left:
         st.info("Please upload an .epw file to analyze.", width=300)
     st.stop()
@@ -496,6 +496,65 @@ with col_left:
             )
         except Exception as _re:
             st.error(f"❌ Failed to generate rainfall report: {_re}")
+
+    elif selected_parameter == "Solar PV":
+        hour_range = (0, 23)
+
+        st.markdown('<div class="control-section-header">⚡ System Size</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "System size (kWp)",
+            value=100.0, step=5.0, min_value=0.5, max_value=50000.0,
+            key="pv_report_kwp",
+            label_visibility="collapsed", width=300,
+            help="Installed DC capacity used for yield and economics slides",
+        )
+
+        st.markdown('<div class="control-section-header">💰 Economics</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Installed cost (USD/kWp)",
+            value=700.0, step=50.0, min_value=100.0, max_value=3000.0,
+            key="pv_report_cost",
+            label_visibility="collapsed", width=300,
+            help="All-in installed cost per kWp",
+        )
+
+        st.markdown('<div class="control-section-header">🏠 Daily Demand</div>',
+                    unsafe_allow_html=True)
+        st.number_input(
+            "Daily energy demand (kWh/day)",
+            value=50.0, step=5.0, min_value=1.0, max_value=100000.0,
+            key="pv_report_demand",
+            label_visibility="collapsed", width=300,
+            help="Used for the system sizing slide",
+        )
+
+        st.markdown('<div class="control-section-header">📊 Report (PowerPoint)</div>',
+                    unsafe_allow_html=True)
+        if uploaded is not None:
+            try:
+                from modules import solar_pv_ppt as _pv_ppt
+                _pv_buf = _pv_ppt.generate_solar_pv_pptx_report(
+                    epw_df      = df,
+                    metadata    = metadata,
+                    system_kWp  = float(st.session_state.get("pv_report_kwp", 100.0)),
+                    cost_per_kWp_usd = float(st.session_state.get("pv_report_cost", 700.0)),
+                    daily_demand_kWh = float(st.session_state.get("pv_report_demand", 50.0)),
+                )
+                _pv_city = (metadata or {}).get("city", "Site")
+                st.download_button(
+                    label="⬇️ Download Solar PV Report",
+                    data=_pv_buf,
+                    file_name=f"SolarPV_Analysis_{_pv_city}.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    key="download_solar_pv_report",
+                    width=300,
+                )
+            except Exception as _pve:
+                st.error(f"❌ Failed to generate Solar PV report: {_pve}")
+        else:
+            st.info("Upload an EPW file to generate the Solar PV report.", width=300)
 
     elif selected_parameter == "Ventilation":
         hour_range = (0, 23)
@@ -691,6 +750,16 @@ with col_right:
             roof_area_m2 = float(st.session_state.get(
                                        "rainfall_roof_area", 200.0)),
         )
+
+    elif selected_parameter == "Solar PV":
+        if uploaded is not None:
+            solar_pv_module.render(df, metadata)
+        else:
+            st.info("☀️ Upload an EPW file to analyse solar PV potential for this location. "
+                    "The Solargis country benchmark data is available without an EPW file — "
+                    "select a country from the dropdown in the Country Benchmark tab.")
+            # Still render the module (it gracefully handles missing EPW data)
+            solar_pv_module.render(pd.DataFrame(), metadata or {})
 
     elif selected_parameter == "Ventilation":
         _s = st.session_state.start_month_idx + 1
