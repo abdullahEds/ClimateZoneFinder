@@ -22,9 +22,11 @@ _C_HIGH    = "#10b981"
 _C_LOW     = "#ef4444"
 _C_BORDER  = "#f97316"
 _C_TEXT    = "#2c3e50"
+_C_Black    = "#000000"
 
-_MONTHS     = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_MONTHS      = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_DAYS_MONTH  = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 _EXCEL_PATH = pathlib.Path(__file__).parents[2] / "solargis_country_pv_data.xlsx"
 
@@ -81,45 +83,94 @@ def _kpi(label: str, value: str, sub: str, color: str) -> str:
     )
 
 
-def _build_chart(values: list, peak_idx: int, low_idx: int, country: str) -> go.Figure:
-    colors = [
+_C_POINT = "#3b82f6"   # blue – daily average scatter points
+
+
+def _build_chart(
+    monthly_vals: list,   # kWh/kWp/month  (bars, left axis)
+    daily_vals: list,     # kWh/kWp/day    (points, right axis)
+    peak_idx: int,
+    low_idx: int,
+    country: str,
+) -> go.Figure:
+    bar_colors = [
         _C_HIGH if i == peak_idx else _C_LOW if i == low_idx else _C_PRIMARY
         for i in range(12)
     ]
 
-    fig = go.Figure(go.Bar(
+    fig = go.Figure()
+
+    # ── Left axis: monthly total bars ────────────────────────────────────────
+    fig.add_trace(go.Bar(
+        name="Monthly Total (kWh/kWp)",
         x=_MONTHS,
-        y=values,
-        marker_color=colors,
+        y=monthly_vals,
+        marker_color=bar_colors,
         marker_line_width=0,
-        text=[f"{v:.2f}" for v in values],
-        textposition="outside",
-        textfont=dict(size=11, color=_C_TEXT),
-        hovertemplate="<b>%{x}</b><br>%{y:.2f} kWh/kWp.day<extra></extra>",
+        yaxis="y1",
+        hovertemplate="<b>%{x}</b><br>Monthly total: %{y:.0f} kWh/kWp<extra></extra>",
     ))
+
+    # ── Right axis: daily average points ─────────────────────────────────────
+    fig.add_trace(go.Scatter(
+        name="Daily Avg (kWh/kWp)",
+        x=_MONTHS,
+        y=daily_vals,
+        mode="markers",
+        marker=dict(
+            color=_C_POINT,
+            size=10,
+            symbol="circle",
+            line=dict(color="white", width=2),
+        ),
+        yaxis="y2",
+        hovertemplate="<b>%{x}</b><br>Daily avg: %{y:.2f} kWh/kWp<extra></extra>",
+    ))
+
+    y1_max = max(monthly_vals) * 1.25
+    y2_min = min(daily_vals) * 0.88
+    y2_max = max(daily_vals) * 1.15
 
     fig.update_layout(
         title=dict(
-            text=f"Monthly Solar PV Specific Yield — {country}",
+            text=f"Solar PV Yield — {country}",
             font=dict(size=16, color=_C_TEXT),
             x=0,
         ),
         xaxis=dict(title="Month", tickfont=dict(size=12)),
         yaxis=dict(
-            title="Specific Yield (kWh / kWp / day)",
-            range=[0, max(values) * 1.2],
+            title=dict(text="Monthly Total (kWh / kWp)",
+                       font=dict(color=_C_Black)),
+            tickfont=dict(color=_C_Black),
+            range=[0, y1_max],
             gridcolor="#f1f5f9",
+            showgrid=True,
         ),
-        height=420,
+        yaxis2=dict(
+            title=dict(text="Daily Average (kWh / kWp)",
+                       font=dict(color=_C_Black)),
+            tickfont=dict(color=_C_Black),
+            range=[y2_min, y2_max],
+            overlaying="y",
+            side="right",
+            showgrid=False,
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.5, xanchor="center",
+            y=-0.18,
+            font=dict(size=11),
+        ),
+        height=460,
         template="plotly_white",
-        showlegend=False,
         plot_bgcolor="white",
-        margin=dict(t=60, b=60, l=70, r=20),
+        margin=dict(t=60, b=80, l=70, r=70),
     )
 
+    # Colour-coded peak/low annotations
     for color, label, xp in [
-        (_C_HIGH, "Highest Generation", 0.70),
-        (_C_LOW,  "Lowest Generation",  0.86),
+        (_C_HIGH, "Highest Generation", 0.4),
+        (_C_LOW,  "Lowest Generation",  0.6),
     ]:
         fig.add_annotation(
             xref="paper", yref="paper",
@@ -159,13 +210,16 @@ def render() -> None:
         help="SolarGIS PVOUT Level 1 — long-term monthly average specific yield.",
     )
 
-    row    = df[df["country"] == selected].iloc[0]
-    values = [float(row[m]) for m in ["jan", "feb", "mar", "apr", "may", "jun",
-                                       "jul", "aug", "sep", "oct", "nov", "dec"]]
+    row         = df[df["country"] == selected].iloc[0]
+    daily_vals  = [float(row[m]) for m in ["jan", "feb", "mar", "apr", "may", "jun",
+                                            "jul", "aug", "sep", "oct", "nov", "dec"]]
+    monthly_vals = [d * days for d, days in zip(daily_vals, _DAYS_MONTH)]
 
-    annual_daily = row["yearly_daily"]
-    peak_idx     = values.index(max(values))
-    low_idx      = values.index(min(values))
+    # Peak/low based on monthly totals (same ranking as daily since days differ slightly)
+    peak_idx     = monthly_vals.index(max(monthly_vals))
+    low_idx      = monthly_vals.index(min(monthly_vals))
+
+    annual_total = sum(monthly_vals)
 
     # ── KPI row ───────────────────────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
@@ -173,27 +227,27 @@ def render() -> None:
 
     with k1:
         st.markdown(
-            _kpi("Annual Yield", f"{annual_daily:.2f}", "kWh / kWp.day (long-term avg)", _C_BORDER),
+            _kpi("Annual Yield", f"{annual_total:,.0f}", "kWh / kWp", _C_BORDER),
             unsafe_allow_html=True,
         )
     with k2:
         st.markdown(
-            _kpi("Highest Generation", _MONTHS[peak_idx],
-                 f"{values[peak_idx]:.2f} kWh/kWp.day", _C_HIGH),
+            _kpi("Peak Generation (monthly)", f"{monthly_vals[peak_idx]:.0f}",
+                 f"kWh / kWp · {_MONTHS[peak_idx]}", _C_HIGH),
             unsafe_allow_html=True,
         )
     with k3:
         st.markdown(
-            _kpi("Lowest Generation", _MONTHS[low_idx],
-                 f"{values[low_idx]:.2f} kWh/kWp.day", _C_LOW),
+            _kpi("Peak Generation (daily average)", f"{daily_vals[peak_idx]:.2f} kWh/kWp", _MONTHS[peak_idx],
+                  _C_PRIMARY),
             unsafe_allow_html=True,
         )
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    # ── Bar chart ─────────────────────────────────────────────────────────────
+    # ── Dual-axis chart ───────────────────────────────────────────────────────
     st.plotly_chart(
-        _build_chart(values, peak_idx, low_idx, selected),
+        _build_chart(monthly_vals, daily_vals, peak_idx, low_idx, selected),
         use_container_width=True,
     )
 
@@ -210,9 +264,10 @@ def render() -> None:
         practical photovoltaic power output (kWh/kWp.day) for
         <strong>{selected}</strong> (ISO&nbsp;{iso}, {region} region).
         <br><br>
-        <em>Monthly bars show the long-term average daily specific yield for each
-        month. Actual yield varies with system tilt, shading, inverter losses, and
-        local microclimate.</em>
+        <em>Bars show monthly total yield (daily avg × days in month, kWh/kWp/month).
+        Points show the long-term average daily specific yield (kWh/kWp/day) on the
+        right axis. Actual yield varies with system tilt, shading, inverter losses,
+        and local microclimate.</em>
         </div>
         """,
         unsafe_allow_html=True,
