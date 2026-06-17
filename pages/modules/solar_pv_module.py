@@ -28,7 +28,9 @@ _MONTHS      = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 _DAYS_MONTH  = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
-_EXCEL_PATH = pathlib.Path(__file__).parents[2] / "solargis_country_pv_data.xlsx"
+_EXCEL_PATH  = pathlib.Path(__file__).parents[2] / "solargis_country_pv_data.xlsx"
+_C_POINT2    = "#6366f1"   # indigo – daily avg scatter on the absolute chart
+_C_PRIMARY2  = "#f59e0b"
 
 
 # ─── Data loading ─────────────────────────────────────────────────────────────
@@ -184,6 +186,100 @@ def _build_chart(
     return fig
 
 
+def _build_absolute_chart(
+    monthly_kwh: list,   # kWh/month  (bars, left axis)
+    daily_kwh: list,     # kWh/day    (points, right axis)
+    peak_idx: int,
+    low_idx: int,
+    country: str,
+    system_kwp: float,
+) -> go.Figure:
+    bar_colors = [
+        _C_HIGH if i == peak_idx else _C_LOW if i == low_idx else _C_PRIMARY2
+        for i in range(12)
+    ]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        name="Monthly Total (kWh)",
+        x=_MONTHS,
+        y=monthly_kwh,
+        marker_color=bar_colors,
+        marker_line_width=0,
+        yaxis="y1",
+        hovertemplate="<b>%{x}</b><br>Monthly total: %{y:.0f} kWh<extra></extra>",
+    ))
+
+    fig.add_trace(go.Scatter(
+        name="Daily Avg (kWh)",
+        x=_MONTHS,
+        y=daily_kwh,
+        mode="markers",
+        marker=dict(
+            color=_C_POINT2,
+            size=10,
+            symbol="circle",
+            line=dict(color="white", width=2),
+        ),
+        yaxis="y2",
+        hovertemplate="<b>%{x}</b><br>Daily avg: %{y:.1f} kWh<extra></extra>",
+    ))
+
+    y1_max = max(monthly_kwh) * 1.25
+    y2_min = min(daily_kwh) * 0.88
+    y2_max = max(daily_kwh) * 1.15
+
+    fig.update_layout(
+        title=dict(
+            text=f"Solar PV Yield — {country} ({system_kwp:.1f} kWp system)",
+            font=dict(size=16, color=_C_TEXT),
+            x=0,
+        ),
+        xaxis=dict(title="Month", tickfont=dict(size=12)),
+        yaxis=dict(
+            title=dict(text="Monthly Total (kWh)", font=dict(color=_C_Black)),
+            tickfont=dict(color=_C_Black),
+            range=[0, y1_max],
+            gridcolor="#f1f5f9",
+            showgrid=True,
+        ),
+        yaxis2=dict(
+            title=dict(text="Daily Average (kWh)", font=dict(color=_C_Black)),
+            tickfont=dict(color=_C_Black),
+            range=[y2_min, y2_max],
+            overlaying="y",
+            side="right",
+            showgrid=False,
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.5, xanchor="center",
+            y=-0.18,
+            font=dict(size=11),
+        ),
+        height=460,
+        template="plotly_white",
+        plot_bgcolor="white",
+        margin=dict(t=60, b=80, l=70, r=70),
+    )
+
+    for color, label, xp in [
+        (_C_HIGH, "Highest Generation", 0.4),
+        (_C_LOW,  "Lowest Generation",  0.6),
+    ]:
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=xp, y=1.07,
+            text=f"<span style='color:{color}'>■</span> {label}",
+            showarrow=False,
+            font=dict(size=11, color=_C_TEXT),
+            align="left",
+        )
+
+    return fig
+
+
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
 def render() -> None:
@@ -203,12 +299,34 @@ def render() -> None:
     countries = sorted(df["country"].tolist())
     default   = "United Arab Emirates" if "United Arab Emirates" in countries else countries[0]
 
-    selected = st.selectbox(
-        "Select Country",
-        options=countries,
-        index=countries.index(default),
-        help="SolarGIS PVOUT Level 1 — long-term monthly average specific yield.",
-    )
+    col_sel, col_roof, col_pct = st.columns([2, 1, 1])
+    with col_sel:
+        selected = st.selectbox(
+            "Select Country",
+            options=countries,
+            index=countries.index(default),
+            help="SolarGIS PVOUT Level 1 — long-term monthly average specific yield.",
+        )
+    with col_roof:
+        roof_size = st.number_input(
+            "Roof Size (m²)",
+            min_value=1,
+            value=100,
+            step=1,
+            help="Total roof area in square metres.",
+        )
+    with col_pct:
+        roof_pct = st.slider(
+            "Solar Coverage (%)",
+            min_value=0,
+            max_value=100,
+            value=80,
+            step=1,
+            help="Percentage of roof area used for solar panels.",
+        )
+
+    effective_area = roof_size * (roof_pct / 100)
+    system_kwp     = effective_area / 10   # 10 m² = 1 kWp
 
     row         = df[df["country"] == selected].iloc[0]
     daily_vals  = [float(row[m]) for m in ["jan", "feb", "mar", "apr", "may", "jun",
@@ -219,11 +337,12 @@ def render() -> None:
     peak_idx     = monthly_vals.index(max(monthly_vals))
     low_idx      = monthly_vals.index(min(monthly_vals))
 
-    annual_total = sum(monthly_vals)
+    annual_total     = sum(monthly_vals)
+    annual_daily_avg = float(row["yearly_daily"])
 
     # ── KPI row ───────────────────────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    k1, k2, k3 = st.columns(3)
+    k1, k2, k3, k4 = st.columns(4)
 
     with k1:
         st.markdown(
@@ -232,24 +351,77 @@ def render() -> None:
         )
     with k2:
         st.markdown(
-            _kpi("Peak Generation (monthly)", f"{monthly_vals[peak_idx]:.0f}",
-                 f"kWh / kWp · {_MONTHS[peak_idx]}", _C_HIGH),
+            _kpi("Annual Daily Average", f"{annual_daily_avg:.2f}", "kWh / kWp.day", _C_BORDER),
             unsafe_allow_html=True,
         )
     with k3:
         st.markdown(
-            _kpi("Peak Generation (daily average)", f"{daily_vals[peak_idx]:.2f} kWh/kWp", _MONTHS[peak_idx],
-                  _C_PRIMARY),
+            _kpi("Peak Generation (monthly)", f"{monthly_vals[peak_idx]:.0f}",
+                 f"kWh / kWp · {_MONTHS[peak_idx]}", _C_HIGH),
+            unsafe_allow_html=True,
+        )
+    with k4:
+        st.markdown(
+            _kpi("Peak Generation (daily average)", f"{daily_vals[peak_idx]:.2f}", f"kWh / kWp · {_MONTHS[peak_idx]}", _C_PRIMARY),
             unsafe_allow_html=True,
         )
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    # ── Dual-axis chart ───────────────────────────────────────────────────────
+    # ── Dual-axis chart (per kWp reference) ──────────────────────────────────
     st.plotly_chart(
         _build_chart(monthly_vals, daily_vals, peak_idx, low_idx, selected),
         use_container_width=True,
     )
+
+    # ── Absolute yield chart (scaled by roof system size) ────────────────────
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-size:13px;color:#64748b;margin-bottom:6px;">'
+        f'<strong>System size:</strong> {effective_area:.1f} m² effective area '
+        f'({roof_size} m² × {roof_pct}%) → <strong>{system_kwp:.2f} kWp</strong>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    if system_kwp > 0:
+        monthly_kwh      = [v * system_kwp for v in monthly_vals]
+        daily_kwh        = [v * system_kwp for v in daily_vals]
+        annual_kwh       = sum(monthly_kwh)
+        annual_daily_kwh = annual_daily_avg * system_kwp
+
+        a1, a2, a3, a4 = st.columns(4)
+        with a1:
+            st.markdown(
+                _kpi("Annual Yield (System)", f"{annual_kwh:,.0f}", "kWh / year", _C_BORDER),
+                unsafe_allow_html=True,
+            )
+        with a2:
+            st.markdown(
+                _kpi("Annual Daily Average", f"{annual_daily_kwh:.1f}", "kWh / day", _C_BORDER),
+                unsafe_allow_html=True,
+            )
+        with a3:
+            st.markdown(
+                _kpi("Peak Month Output", f"{monthly_kwh[peak_idx]:,.0f}",
+                     f"kWh · {_MONTHS[peak_idx]}", _C_HIGH),
+                unsafe_allow_html=True,
+            )
+        with a4:
+            st.markdown(
+                _kpi("Peak Day Output", f"{daily_kwh[peak_idx]:.1f}",
+                     f"kWh / day · {_MONTHS[peak_idx]}", _C_PRIMARY),
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+        st.plotly_chart(
+            _build_absolute_chart(monthly_kwh, daily_kwh, peak_idx, low_idx,
+                                  selected, system_kwp),
+            use_container_width=True,
+        )
+    else:
+        st.info("Set a roof size and coverage above 0% to see absolute yield estimates.")
 
     # ── Data source note ──────────────────────────────────────────────────────
     iso    = row["iso_a3"]
