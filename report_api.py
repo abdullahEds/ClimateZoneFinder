@@ -317,6 +317,10 @@ async def generate_combined_report(
     rainfall_water_area_m2:  float = Form(0.0, ge=0, description="Waterbody area m² (default: 0)"),
     rainfall_gi_percentile:  int   = Form(95,  description="GI percentile baseline. Valid: 85, 90, 95, 98 (default: 95)"),
     rainfall_gi_start_year:  int   = Form(1990, ge=1950, le=2023, description="GI historical start year (default: 1990)"),
+    # ── Solar PV section ─────────────────────────────────────────────────────
+    solar_pv_country:       str   = Form("India", description="Country name for SolarGIS PV yield data (default: India)"),
+    solar_pv_roof_size_m2:  float = Form(100.0, ge=1, description="Total roof area in m² (default: 100). Every 10 m² = 1 kWp."),
+    solar_pv_roof_pct:      float = Form(80.0, ge=0, le=100, description="Percentage of roof area used for solar panels (default: 80%)"),
     output_format: str = Query("pptx", description="Output format: 'pptx' (default) or 'pdf' (requires LibreOffice)"),
 ):
     """
@@ -362,6 +366,9 @@ async def generate_combined_report(
             rainfall_heavy_threshold=rainfall_heavy_threshold,
             rainfall_gi_percentile=rainfall_gi_percentile,
             project_name=str(project_name), client_name=str(client_name),
+            solar_pv_country=solar_pv_country,
+            solar_pv_roof_size_m2=solar_pv_roof_size_m2,
+            solar_pv_roof_pct=solar_pv_roof_pct,
         )
         if cache_key in _report_cache:
             pptx_buffer = io.BytesIO(_report_cache[cache_key])
@@ -388,6 +395,9 @@ async def generate_combined_report(
                     rainfall_gi_percentile=rainfall_gi_percentile,
                     rainfall_gi_start_year=rainfall_gi_start_year,
                     branding=branding,
+                    solar_pv_country=solar_pv_country,
+                    solar_pv_roof_size_m2=solar_pv_roof_size_m2,
+                    solar_pv_roof_pct=solar_pv_roof_pct,
                 ),
             )
             _report_cache[cache_key] = pptx_buffer.getvalue()
@@ -651,7 +661,10 @@ def api_documentation():
                     "rainfall_green_area_m2": "Green area m², RC=0.10 (default: 0)",
                     "rainfall_water_area_m2": "Waterbody area m², RC=0.90 (default: 0)",
                     "rainfall_gi_percentile": "GI baseline percentile — valid: 85, 90, 95, 98 (default: 95)",
-                    "rainfall_gi_start_year": "Earliest year for GI historical baseline (default: 1990)"
+                    "rainfall_gi_start_year": "Earliest year for GI historical baseline (default: 1990)",
+                    "solar_pv_country": "Country name for SolarGIS PV data (default: India)",
+                    "solar_pv_roof_size_m2": "Total roof area m² — every 10 m² = 1 kWp (default: 100)",
+                    "solar_pv_roof_pct": "% of roof used for solar panels, 0–100 (default: 80)"
                 }
             },
             "rainfall_stations": {

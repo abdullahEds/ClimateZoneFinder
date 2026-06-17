@@ -306,6 +306,7 @@ def render() -> None:
             options=countries,
             index=countries.index(default),
             help="SolarGIS PVOUT Level 1 — long-term monthly average specific yield.",
+            key="solar_pv_country",
         )
     with col_roof:
         roof_size = st.number_input(
@@ -314,6 +315,7 @@ def render() -> None:
             value=100,
             step=1,
             help="Total roof area in square metres.",
+            key="solar_pv_roof_size",
         )
     with col_pct:
         roof_pct = st.slider(
@@ -323,6 +325,7 @@ def render() -> None:
             value=80,
             step=1,
             help="Percentage of roof area used for solar panels.",
+            key="solar_pv_roof_pct",
         )
 
     effective_area = roof_size * (roof_pct / 100)

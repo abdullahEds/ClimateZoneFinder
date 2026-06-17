@@ -636,6 +636,9 @@ with col_left:
                 } if _rain_stn else None,
                 rainfall_gi_percentile=int(st.session_state.get("balance_percentile", 95)),
                 rainfall_gi_start_year=int(st.session_state.get("balance_start_year", 1990)),
+                solar_pv_country=st.session_state.get("solar_pv_country", "India"),
+                solar_pv_roof_size_m2=float(st.session_state.get("solar_pv_roof_size", 100)),
+                solar_pv_roof_pct=float(st.session_state.get("solar_pv_roof_pct", 80)),
             )
 
             st.download_button(

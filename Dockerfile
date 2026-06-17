@@ -25,6 +25,9 @@ COPY requirements_api.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements_api.txt
 
+# Copy SolarGIS data file explicitly (required by Solar PV module)
+COPY solargis_country_pv_data.xlsx .
+
 # Copy project files
 COPY . .
 
