@@ -49,6 +49,30 @@ def parse_location_parameter():
 url_location_params = parse_location_parameter()
 
 
+# Auto-populate EPW URL in session state when ?location= param is present.
+# The analysis page already knows how to fetch + unzip from st.session_state["epw_url"].
+if url_location_params.get("location") and "epw_url" not in st.session_state:
+    try:
+        _nbc = pd.read_excel("INDIA-WeatherMapping.xlsx")
+        _loc = url_location_params["location"]
+        _state = url_location_params.get("state")
+        _mask = _nbc["Location"].str.strip() == _loc.strip()
+        if _state:
+            _state_mask = _nbc["State"].str.strip() == _state.strip()
+            _result = _nbc[_mask & _state_mask]
+            if _result.empty:
+                _result = _nbc[_mask]
+        else:
+            _result = _nbc[_mask]
+        if not _result.empty:
+            _epw_url = _result.iloc[0].get("EPW File", None)
+            if _epw_url and isinstance(_epw_url, str) and _epw_url.startswith("http"):
+                st.session_state["epw_url"] = _epw_url
+                st.session_state["epw_auto_location"] = _loc
+    except Exception:
+        pass
+
+
 def get_base64_image(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()

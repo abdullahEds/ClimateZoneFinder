@@ -32,7 +32,7 @@ from modules.ppt_report import generate_pptx_report, generate_shading_pptx_repor
 from modules.combined_report import generate_combined_pptx_report
 from modules.sun_path import render_sun_path_section
 from modules.dbt_module import calculate_ashrae_comfort
-from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module, rainfall_module
+from modules import dbt_module, humidity_module, wind_module, ventilation_module, thermal_comfort_module, rainfall_module, solar_pv_module
 
 # ─── Page configuration ───────────────────────────────────────────────────────
 
@@ -263,7 +263,14 @@ with col_left:
 
     uploaded = st.file_uploader("", type=["epw"], label_visibility="collapsed", width=300)
 
-    # If user selected an EPW from the main page, fetch it into `uploaded`
+    # Show banner when EPW was auto-loaded from a URL ?location= parameter
+    if st.session_state.get("epw_auto_location") and st.session_state.get("epw_url"):
+        st.info(
+            f"EPW file auto-loaded for **{st.session_state['epw_auto_location']}**. "
+            "Upload a different file above to override."
+        )
+
+    # If user selected an EPW from the main page (or auto-loaded via URL param), fetch it
     if uploaded is None and st.session_state.get("epw_url"):
         try:
             epw_url = st.session_state.get("epw_url")
@@ -291,13 +298,13 @@ with col_left:
     st.write("##### Module")
     selected_parameter = st.selectbox(
         "Select parameter",
-        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort", "Rainfall"],
+        ["Temperature", "Humidity", "Sun Path", "Wind", "Ventilation", "Thermal Comfort", "Rainfall", "Solar PV"],
         label_visibility="collapsed",
         key="parameter_selector",
         width=300,
     )
 
-if uploaded is None and selected_parameter != "Rainfall":
+if uploaded is None and selected_parameter not in ("Rainfall", "Solar PV"):
     with col_left:
         st.info("Please upload an .epw file to analyze.", width=300)
     st.stop()
@@ -490,6 +497,9 @@ with col_left:
         except Exception as _re:
             st.error(f"❌ Failed to generate rainfall report: {_re}")
 
+    elif selected_parameter == "Solar PV":
+        hour_range = (0, 23)
+
     elif selected_parameter == "Ventilation":
         hour_range = (0, 23)
 
@@ -626,6 +636,9 @@ with col_left:
                 } if _rain_stn else None,
                 rainfall_gi_percentile=int(st.session_state.get("balance_percentile", 95)),
                 rainfall_gi_start_year=int(st.session_state.get("balance_start_year", 1990)),
+                solar_pv_country=st.session_state.get("solar_pv_country", "India"),
+                solar_pv_roof_size_m2=float(st.session_state.get("solar_pv_roof_size", 100)),
+                solar_pv_roof_pct=float(st.session_state.get("solar_pv_roof_pct", 80)),
             )
 
             st.download_button(
@@ -684,6 +697,9 @@ with col_right:
             roof_area_m2 = float(st.session_state.get(
                                        "rainfall_roof_area", 200.0)),
         )
+
+    elif selected_parameter == "Solar PV":
+        solar_pv_module.render()
 
     elif selected_parameter == "Ventilation":
         _s = st.session_state.start_month_idx + 1

@@ -4,7 +4,8 @@ import concurrent.futures
 import io
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, date
+from typing import Optional
 # from tkinter import SW
 
 import matplotlib.pyplot as plt
@@ -17,7 +18,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-from modules.shading_helpers import (
+from .shading_helpers import (
     _ORIENTATIONS,
     build_thermal_matrix,
     compute_shading_geometry,
@@ -42,28 +43,31 @@ def _ppt_remove_all_slides(prs):
 
 def generate_combined_pptx_report(
     df: pd.DataFrame,
-    start_date,
-    end_date,
+    start_date: date,
+    end_date: date,
     start_hour: int,
     end_hour: int,
     selected_parameter: str,
-    metadata: dict = None,
+    metadata: Optional[dict] = None,
     temp_threshold: float = 28.0,
     rad_threshold: float = 315.0,
     design_cutoff_angle: float = 45.0,
     n_sectors: int = 16,
     include_thermal_comfort: bool = False,
-    # ── Optional Rainfall Analysis ─────────────────────────────────────────────
-    rainfall_station_name: str = None,
-    rainfall_station_id: str = None,
-    rainfall_year: int = None,
+    rainfall_station_name: Optional[str] = None,
+    rainfall_station_id: Optional[str] = None,
+    rainfall_year: Optional[int] = None,
     rainfall_start_month: int = 1,
     rainfall_end_month: int = 12,
     rainfall_heavy_threshold: float = 50.0,
-    rainfall_surface_areas: dict = None,
+    rainfall_surface_areas: Optional[dict[str, float]] = None,
     rainfall_gi_percentile: int = 95,
     rainfall_gi_start_year: int = 1990,
-):
+    branding: Optional[dict] = None,
+    solar_pv_country: str = "India",
+    solar_pv_roof_size_m2: float = 100.0,
+    solar_pv_roof_pct: float = 80.0,
+) -> io.BytesIO:
     """Generate a combined PowerPoint report with Climate + Shading Analysis + Assumptions slide."""
 
     try:
@@ -89,7 +93,7 @@ def generate_combined_pptx_report(
     _rain_executor = None
     if rainfall_station_id and rainfall_year:
         try:
-            from modules.rainfall_module import (
+            from .rainfall_module import (
                 _fetch_noaa as _bg_fetch_noaa,
                 _fetch_percentile_depth as _bg_fetch_perc,
             )
@@ -193,6 +197,7 @@ def generate_combined_pptx_report(
 
     # ── COVER SLIDE ───────────────────────────────────────────────────────────
     def _make_cover_slide():
+        _branding = branding or {}
         slide = prs.slides.add_slide(BLANK_LAYOUT)
 
         bg = slide.shapes.add_shape(1, Inches(0), Inches(2.5), Inches(SW), Inches(2.5))
@@ -216,15 +221,25 @@ def generate_combined_pptx_report(
         _city = metadata.get("city", "") if metadata else ""
         _location = metadata.get("location", "") if metadata else ""
         location_display = _city if _city else (_location if _location else "Location")
-        run2.text = f"{location_display}"
+        project_display = _branding.get("project_name") or location_display
+        run2.text = project_display
         run2.font.size = Pt(16)
         run2.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
+
+        # Client name (if provided)
+        if _branding.get("client_name"):
+            tb_client = slide.shapes.add_textbox(Inches(0.6), Inches(4.55), Inches(SW - 1.2), Inches(0.45))
+            run_c = tb_client.text_frame.paragraphs[0].add_run()
+            run_c.text = f"Prepared for: {_branding['client_name']}"
+            run_c.font.size = Pt(12)
+            run_c.font.color.rgb = RGBColor(0xFF, 0xCC, 0xCC)
 
         tb3 = slide.shapes.add_textbox(Inches(0.6), Inches(6.5), Inches(SW - 1.2), Inches(0.4))
         tf3 = tb3.text_frame
         p3 = tf3.paragraphs[0]
         run3 = p3.add_run()
-        run3.text = "Comprehensive Climate & Shading Analysis with Strategic Recommendations"
+        _report_date = _branding.get("report_date") or datetime.now().strftime("%d %B %Y")
+        run3.text = _report_date
         run3.font.size = Pt(11)
         run3.font.color.rgb = DARK_GREY
 
@@ -365,7 +380,33 @@ def generate_combined_pptx_report(
         p.font.size = Pt(10)
         p.font.color.rgb = DARK_GREY
         p.space_before = Pt(0)
-        p.space_after = Pt(2)
+        p.space_after = Pt(6)
+
+        # Solar PV Parameters
+        p = tf.add_paragraph()
+        p.text = "Solar PV Assumptions"
+        p.font.size = Pt(11)
+        p.font.bold = True
+        p.font.color.rgb = TITLE_RED
+        p.space_before = Pt(2)
+        p.space_after = Pt(4)
+
+        _eff_area = solar_pv_roof_size_m2 * (solar_pv_roof_pct / 100.0)
+        _sys_kwp  = _eff_area / 10.0
+        for _line in [
+            f"• Country / Location: {solar_pv_country}",
+            f"• Total Roof Size: {solar_pv_roof_size_m2:.0f} m²",
+            f"• Solar Coverage: {solar_pv_roof_pct:.0f}% of roof area",
+            f"• Effective PV Area: {_eff_area:.1f} m²  →  System Size: {_sys_kwp:.2f} kWp  (10 m² = 1 kWp)",
+            "• Data Source: World Bank Global Solar Atlas 2.0 / SolarGIS PVOUT Level 1",
+            "• Values represent long-term monthly average specific yield (kWh/kWp.day)",
+        ]:
+            p = tf.add_paragraph()
+            p.text = _line
+            p.font.size = Pt(10)
+            p.font.color.rgb = DARK_GREY
+            p.space_before = Pt(0)
+            p.space_after = Pt(2)
 
         _add_logo(slide)
 
@@ -1240,7 +1281,7 @@ def generate_combined_pptx_report(
     def _prepare_wind_slides():
         """Prepare and add wind analysis slides."""
         try:
-            from modules.wind_module import (
+            from .wind_module import (
                 prepare_wind_data, compute_wind_rose, compute_wind_statistics,
                 _SPEED_LABELS, _SPEED_COLORS, _SPEED_BINS,
                 _DIR_16, _DIR_8, _DIR_4, _MONTH_NAMES, _MONTH_COLORS,
@@ -1686,7 +1727,7 @@ def generate_combined_pptx_report(
         if not include_thermal_comfort:
             return  # Skip thermal comfort section if not requested
         try:
-            from modules.thermal_comfort_ppt import (
+            from .thermal_comfort_ppt import (
                 compute_psychrometric_simple,
                 compute_adaptive_comfort_simple,
                 classify_comfort_simple,
@@ -1950,7 +1991,7 @@ def generate_combined_pptx_report(
             return
 
         try:
-            from modules.rainfall_module import _fetch_noaa, _fetch_percentile_depth, _RUNOFF_SURFACES
+            from .rainfall_module import _fetch_noaa, _fetch_percentile_depth, _RUNOFF_SURFACES
         except ImportError:
             return
 
@@ -2259,6 +2300,212 @@ def generate_combined_pptx_report(
 
     if _rain_executor is not None:
         _rain_executor.shutdown(wait=False)
+
+    # ── SECTION 11 – SOLAR PV POTENTIAL ───────────────────────────────────────
+    def _prepare_solar_pv_slides():
+        import pathlib
+
+        _MONTHS_PV = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        _DAYS_PV   = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+        excel_path = pathlib.Path(base_dir) / "solargis_country_pv_data.xlsx"
+        if not excel_path.exists():
+            return
+        try:
+            _raw = pd.read_excel(excel_path, sheet_name="Monthly data", header=None)
+            _raw.columns = _raw.iloc[1]
+            _raw = _raw.iloc[2:].reset_index(drop=True)
+            _month_cols = ["January", "February", "March", "April", "May", "June",
+                           "July", "August", "September", "October", "November", "December"]
+            _pv = pd.DataFrame()
+            _pv["country"]      = _raw["Country or region"].astype(str).str.strip()
+            _pv["yearly_daily"] = pd.to_numeric(_raw["Yearly"], errors="coerce")
+            for _col in _month_cols:
+                _pv[_col.lower()[:3]] = pd.to_numeric(_raw[_col], errors="coerce")
+            _mask = _pv["country"] == solar_pv_country
+            if not _mask.any():
+                return
+            _row = _pv[_mask].iloc[0]
+        except Exception:
+            return
+
+        _daily_vals   = [float(_row[m]) for m in ["jan", "feb", "mar", "apr", "may", "jun",
+                                                    "jul", "aug", "sep", "oct", "nov", "dec"]]
+        _monthly_vals = [d * days for d, days in zip(_daily_vals, _DAYS_PV)]
+        _annual_daily = float(_row["yearly_daily"])
+        _annual_total = sum(_monthly_vals)
+        _peak_idx     = _monthly_vals.index(max(_monthly_vals))
+        _low_idx      = _monthly_vals.index(min(_monthly_vals))
+
+        _eff_area     = solar_pv_roof_size_m2 * (solar_pv_roof_pct / 100.0)
+        _sys_kwp      = _eff_area / 10.0
+        _monthly_kwh  = [v * _sys_kwp for v in _monthly_vals]
+        _daily_kwh    = [v * _sys_kwp for v in _daily_vals]
+        _annual_kwh   = sum(_monthly_kwh)
+        _ann_daily_kw = _annual_daily * _sys_kwp
+
+        _C_AMBER = RGBColor(0xF5, 0x9E, 0x0B)
+
+        # ── KPI card helpers (scoped to solar PV section) ─────────────────────
+        def _hex_rgb_pv(h):
+            return RGBColor(int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
+
+        def _pv_kpi_card(slide, left, top, width, height, label, value, sub, hex_color):
+            rect = slide.shapes.add_shape(1, Inches(left), Inches(top), Inches(width), Inches(height))
+            rect.fill.solid()
+            rect.fill.fore_color.rgb = _hex_rgb_pv(hex_color)
+            rect.line.fill.background()
+            _lc = RGBColor(0xFF, 0xE0, 0xB2)
+            _sc = RGBColor(0xFF, 0xF0, 0xD0)
+            tb = slide.shapes.add_textbox(Inches(left + 0.07), Inches(top + 0.06),
+                                          Inches(width - 0.14), Inches(0.20))
+            p = tb.text_frame.paragraphs[0]
+            p.alignment = PP_ALIGN.CENTER
+            r = p.add_run(); r.text = label; r.font.size = Pt(9); r.font.color.rgb = _lc
+            val_top = top + (height - 0.28) / 2 - 0.05
+            tbv = slide.shapes.add_textbox(Inches(left + 0.05), Inches(val_top),
+                                           Inches(width - 0.10), Inches(0.50))
+            pv = tbv.text_frame.paragraphs[0]
+            pv.alignment = PP_ALIGN.CENTER
+            rv = pv.add_run(); rv.text = value
+            rv.font.size = Pt(26) if height >= 0.80 else Pt(22)
+            rv.font.bold = True; rv.font.color.rgb = WHITE
+            tbs = slide.shapes.add_textbox(Inches(left + 0.07), Inches(top + height - 0.22),
+                                           Inches(width - 0.14), Inches(0.20))
+            ps = tbs.text_frame.paragraphs[0]
+            ps.alignment = PP_ALIGN.CENTER
+            rs = ps.add_run(); rs.text = sub; rs.font.size = Pt(8); rs.font.color.rgb = _sc
+
+        def _pv_kpi_row(slide, cards, top, card_h=0.88):
+            n = len(cards)
+            gap = 0.12
+            card_w = (SW - 0.54 - gap * (n - 1)) / n
+            left = 0.27
+            for lbl, val, sub, clr in cards:
+                _pv_kpi_card(slide, left, top, card_w, card_h, lbl, val, sub, clr)
+                left += card_w + gap
+
+        # ── Section header ────────────────────────────────────────────────────
+        def _pv_section_header():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            bg = slide.shapes.add_shape(1, Inches(0), Inches(2.5), Inches(SW), Inches(2.5))
+            bg.fill.solid()
+            bg.fill.fore_color.rgb = _C_AMBER
+            bg.line.fill.background()
+            tb = slide.shapes.add_textbox(Inches(0.6), Inches(2.7), Inches(SW - 1.2), Inches(1.1))
+            run = tb.text_frame.paragraphs[0].add_run()
+            run.text = "Solar PV Potential"
+            run.font.size = Pt(40)
+            run.font.bold = True
+            run.font.color.rgb = WHITE
+            tb2 = slide.shapes.add_textbox(Inches(0.6), Inches(3.85), Inches(SW - 1.2), Inches(0.7))
+            run2 = tb2.text_frame.paragraphs[0].add_run()
+            run2.text = (
+                f"{solar_pv_country}  |  "
+                f"{solar_pv_roof_size_m2:.0f} m² roof × {solar_pv_roof_pct:.0f}% coverage  "
+                f"→  {_sys_kwp:.2f} kWp system"
+            )
+            run2.font.size = Pt(15)
+            run2.font.color.rgb = RGBColor(0xFF, 0xF0, 0xCC)
+            _add_logo(slide)
+        _pv_section_header()
+
+        # ── Reusable dual-axis chart builder ──────────────────────────────────
+        def _pv_chart(monthly_y, daily_y, y1_lbl, y2_lbl, title):
+            _H = "#f59e0b"
+            _G = "#10b981"
+            _R = "#ef4444"
+            _B = "#3b82f6"
+            bar_colors = [_G if i == _peak_idx else _R if i == _low_idx else _H for i in range(12)]
+            x = np.arange(12)
+            fig, ax1 = plt.subplots(figsize=(13, 4.6), dpi=100)
+            ax2 = ax1.twinx()
+            ax1.bar(x, monthly_y, color=bar_colors, alpha=0.88, zorder=2)
+            ax2.scatter(x, daily_y, color=_B, s=80, zorder=3, edgecolors="white", linewidths=1.5)
+            ax1.set_xticks(x)
+            ax1.set_xticklabels(_MONTHS_PV, fontsize=10)
+            ax1.set_ylabel(y1_lbl, fontsize=10, fontweight="bold")
+            ax2.set_ylabel(y2_lbl, fontsize=10, fontweight="bold")
+            ax1.set_title(title, fontsize=13, fontweight="bold", pad=10, color="#333")
+            ax1.grid(True, alpha=0.25, linestyle="--", axis="y")
+            ax1.set_facecolor("#fafafa")
+            fig.patch.set_facecolor("white")
+            from matplotlib.patches import Patch
+            from matplotlib.lines import Line2D
+            legend_elems = [
+                Patch(facecolor=_G, label="Peak Month"),
+                Patch(facecolor=_R, label="Lowest Month"),
+                Patch(facecolor=_H, label="Monthly Total (bars)"),
+                Line2D([0], [0], marker="o", color="w", markerfacecolor=_B, markersize=8, label="Daily Avg (points)"),
+            ]
+            ax1.legend(handles=legend_elems, loc="upper center",
+                       bbox_to_anchor=(0.5, -0.10), ncol=4, frameon=True, fontsize=9)
+            plt.tight_layout()
+            return fig
+
+        _PV_CHART_TOP = 0.72
+        _PV_CHART_H   = 4.0
+        _PV_KPI_TOP   = 4.86
+        _PV_KPI_H     = 0.88
+
+        # ── Slide 1: Per-kWp reference ────────────────────────────────────────
+        def _pv_per_kwp_slide():
+            slide = prs.slides.add_slide(BLANK_LAYOUT)
+            _add_slide_title(slide, f"Solar PV Yield — {solar_pv_country}  (Per kWp Reference)")
+            _add_divider(slide, 0.62)
+            try:
+                fig = _pv_chart(
+                    _monthly_vals, _daily_vals,
+                    "Monthly Total (kWh / kWp)", "Daily Avg (kWh / kWp.day)",
+                    f"Monthly PV Yield — {solar_pv_country}",
+                )
+                tmp = _save_mpl_figure(fig)
+                plt.close(fig)
+                slide.shapes.add_picture(tmp, Inches(0.27), Inches(_PV_CHART_TOP),
+                                         width=Inches(SW - 0.54), height=Inches(_PV_CHART_H))
+                os.unlink(tmp)
+                _pv_kpi_row(slide, [
+                    ("Annual Yield",         f"{_annual_total:,.0f}",          "kWh / kWp",                           "#f97316"),
+                    ("Annual Daily Average", f"{_annual_daily:.2f}",           "kWh / kWp.day",                     "#f97316"),
+                    ("Peak Month Total",     f"{_monthly_vals[_peak_idx]:.0f}", f"kWh/kWp · {_MONTHS_PV[_peak_idx]}", "#10b981"),
+                    ("Peak Day Average",     f"{_daily_vals[_peak_idx]:.2f}",  f"kWh/kWp.d · {_MONTHS_PV[_peak_idx]}", "#f59e0b"),
+                ], top=_PV_KPI_TOP, card_h=_PV_KPI_H)
+            except Exception as e:
+                _err_box(slide, e)
+            _add_logo(slide)
+        _pv_per_kwp_slide()
+
+        # ── Slide 2: Absolute system yield ────────────────────────────────────
+        if _sys_kwp > 0:
+            def _pv_absolute_slide():
+                slide = prs.slides.add_slide(BLANK_LAYOUT)
+                _add_slide_title(slide, f"Solar PV System Yield — {solar_pv_country}  ({_sys_kwp:.2f} kWp)")
+                _add_divider(slide, 0.62)
+                try:
+                    fig = _pv_chart(
+                        _monthly_kwh, _daily_kwh,
+                        "Monthly Total (kWh)", "Daily Avg (kWh / day)",
+                        f"{_sys_kwp:.2f} kWp System — Monthly Output  "
+                        f"({solar_pv_roof_size_m2:.0f} m² × {solar_pv_roof_pct:.0f}% = {_eff_area:.1f} m²)",
+                    )
+                    tmp = _save_mpl_figure(fig)
+                    plt.close(fig)
+                    slide.shapes.add_picture(tmp, Inches(0.27), Inches(_PV_CHART_TOP),
+                                             width=Inches(SW - 0.54), height=Inches(_PV_CHART_H))
+                    os.unlink(tmp)
+                    _pv_kpi_row(slide, [
+                        ("Annual Yield (System)", f"{_annual_kwh:,.0f}",          "kWh / year",                           "#f97316"),
+                        ("Annual Daily Average",  f"{_ann_daily_kw:.1f}",         "kWh / day",                            "#f97316"),
+                        ("Peak Month Output",     f"{_monthly_kwh[_peak_idx]:,.0f}", f"kWh · {_MONTHS_PV[_peak_idx]}",    "#10b981"),
+                        ("Peak Day Output",       f"{_daily_kwh[_peak_idx]:.1f}", f"kWh/d · {_MONTHS_PV[_peak_idx]}",    "#f59e0b"),
+                    ], top=_PV_KPI_TOP, card_h=_PV_KPI_H)
+                except Exception as e:
+                    _err_box(slide, e)
+                _add_logo(slide)
+            _pv_absolute_slide()
+
+    _prepare_solar_pv_slides()
 
     # ── ANNEXURE SLIDE ────────────────────────────────────────────────────────
     def _make_annexure_slide():

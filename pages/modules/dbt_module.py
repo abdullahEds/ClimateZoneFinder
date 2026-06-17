@@ -5,9 +5,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+from .config import (
+    ASHRAE_T_PMA_MIN, ASHRAE_T_PMA_MAX,
+    ASHRAE_COMFORT_NEUTRAL_A, ASHRAE_COMFORT_NEUTRAL_B,
+    COMFORT_BAND_80_PCT, COMFORT_BAND_90_PCT,
+)
 
 
-def calculate_ashrae_comfort(df: pd.DataFrame) -> tuple:
+def calculate_ashrae_comfort(df: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
     """
     Calculate ASHRAE adaptive comfort bands.
 
@@ -18,14 +23,16 @@ def calculate_ashrae_comfort(df: pd.DataFrame) -> tuple:
     daily_avg = df.groupby("doy")["dry_bulb_temperature"].mean()
     # ASHRAE 55 prevailing mean outdoor temperature (7-day running mean)
     # Clipped to the model's valid applicability range: 10–33.5 °C
-    t_running_mean = daily_avg.rolling(window=7, center=True, min_periods=1).mean().clip(10, 33.5)
+    t_running_mean = daily_avg.rolling(window=7, center=True, min_periods=1).mean().clip(
+        ASHRAE_T_PMA_MIN, ASHRAE_T_PMA_MAX
+    )
     # ASHRAE 55 adaptive comfort neutral temperature
-    t_comfort = 0.31 * t_running_mean + 17.8
+    t_comfort = ASHRAE_COMFORT_NEUTRAL_A * t_running_mean + ASHRAE_COMFORT_NEUTRAL_B
     return (
-        t_comfort - 3.5,
-        t_comfort + 3.5,
-        t_comfort - 2.5,
-        t_comfort + 2.5,
+        t_comfort - COMFORT_BAND_80_PCT,
+        t_comfort + COMFORT_BAND_80_PCT,
+        t_comfort - COMFORT_BAND_90_PCT,
+        t_comfort + COMFORT_BAND_90_PCT,
     )
 
 

@@ -10,6 +10,12 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
+from .config import (
+    ASHRAE_COMFORT_NEUTRAL_A, ASHRAE_COMFORT_NEUTRAL_B,
+    CDH_BASE_TEMP, HDH_BASE_TEMP,
+    COMFORT_BAND_80_PCT, COMFORT_BAND_90_PCT,
+    ASHRAE_T_PMA_MIN, ASHRAE_T_PMA_MAX,
+)
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -48,7 +54,7 @@ def compute_psychrometric_simple(df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_adaptive_comfort_simple(df: pd.DataFrame) -> pd.DataFrame:
     """Compute ASHRAE 55 adaptive comfort for PPT generation."""
-    ALPHA = 0.9
+    from .config import ASHRAE_ALPHA as ALPHA
     
     out = df.copy()
     T = pd.to_numeric(out["dry_bulb_temperature"], errors="coerce")
@@ -77,11 +83,11 @@ def compute_adaptive_comfort_simple(df: pd.DataFrame) -> pd.DataFrame:
     out["t_pma"] = out["doy"].map(pma_series)
     
     # Comfort temperature
-    out["t_comf"] = 0.31 * out["t_pma"] + 17.8
-    out["t_comf_80_lo"] = out["t_comf"] - 3.5
-    out["t_comf_80_hi"] = out["t_comf"] + 3.5
-    out["t_comf_90_lo"] = out["t_comf"] - 2.5
-    out["t_comf_90_hi"] = out["t_comf"] + 2.5
+    out["t_comf"] = ASHRAE_COMFORT_NEUTRAL_A * out["t_pma"] + ASHRAE_COMFORT_NEUTRAL_B
+    out["t_comf_80_lo"] = out["t_comf"] - COMFORT_BAND_80_PCT
+    out["t_comf_80_hi"] = out["t_comf"] + COMFORT_BAND_80_PCT
+    out["t_comf_90_lo"] = out["t_comf"] - COMFORT_BAND_90_PCT
+    out["t_comf_90_hi"] = out["t_comf"] + COMFORT_BAND_90_PCT
     
     # Applicability (ASHRAE 55 limits prevailing mean to 10â€“33.5 Â°C)
     out["adaptive_applicable"] = out["t_pma"].between(10.0, 33.5)
@@ -202,14 +208,11 @@ def plot_strategy_distribution(df: pd.DataFrame) -> plt.Figure:
 
 def plot_degree_hours_monthly(df: pd.DataFrame) -> plt.Figure:
     """Create monthly cooling and heating degree hours chart."""
-    CDH_BASE = 24.0
-    HDH_BASE = 18.0
-    
     T = pd.to_numeric(df["dry_bulb_temperature"], errors="coerce")
     month = df["month"]
-    
-    cdh = (T - CDH_BASE).clip(lower=0)
-    hdh = (HDH_BASE - T).clip(lower=0)
+
+    cdh = (T - CDH_BASE_TEMP).clip(lower=0)
+    hdh = (HDH_BASE_TEMP - T).clip(lower=0)
     
     cdh_monthly = cdh.groupby(month).sum().reindex(range(1, 13), fill_value=0)
     hdh_monthly = hdh.groupby(month).sum().reindex(range(1, 13), fill_value=0)
@@ -228,7 +231,7 @@ def plot_degree_hours_monthly(df: pd.DataFrame) -> plt.Figure:
     ax.set_xticks(x)
     ax.set_xticklabels(months_lbl, fontsize=10)
     ax.set_ylabel("Degree Hours (Â°CÂ·h)", fontsize=11, fontweight='bold')
-    ax.set_title(f"Monthly Degree Hours (CDH base {CDH_BASE:.0f}Â°C | HDH base {HDH_BASE:.0f}Â°C)", 
+    ax.set_title(f"Monthly Degree Hours (CDH base {CDH_BASE_TEMP:.0f}°C | HDH base {HDH_BASE_TEMP:.0f}°C)",
                  fontsize=12, fontweight='bold', pad=10, color='#333')
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), ncol=2, frameon=True, fontsize=10)
     ax.grid(True, alpha=0.25, linestyle='--', axis='y')
@@ -253,7 +256,7 @@ def plot_adaptive_comfort_scatter(df: pd.DataFrame) -> plt.Figure:
     
     # Sort for band line drawing
     sorted_pma = np.linspace(fdf["t_pma"].min() - 1, fdf["t_pma"].max() + 1, 200)
-    comf_line = 0.31 * sorted_pma + 17.8
+    comf_line = ASHRAE_COMFORT_NEUTRAL_A * sorted_pma + ASHRAE_COMFORT_NEUTRAL_B
     
     fig, ax = plt.subplots(figsize=(13, 5.5), dpi=120)
     
@@ -421,7 +424,7 @@ def plot_comfort_percentages(df: pd.DataFrame) -> plt.Figure:
 def generate_thermal_comfort_pptx_report(
     df: pd.DataFrame,
     metadata: dict,
-):
+) -> io.BytesIO:
     """Generate a Thermal Comfort PowerPoint report using the Voha template."""
     
     try:

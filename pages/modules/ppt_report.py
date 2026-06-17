@@ -3,6 +3,8 @@
 import io
 import os
 import tempfile
+from datetime import date
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,7 +16,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-from modules.shading_helpers import (
+from .shading_helpers import (
     _ORIENTATIONS,
     build_thermal_matrix,
     compute_shading_geometry,
@@ -39,13 +41,13 @@ def _ppt_remove_all_slides(prs):
 
 def generate_pptx_report(
     df: pd.DataFrame,
-    start_date,
-    end_date,
+    start_date: date,
+    end_date: date,
     start_hour: int,
     end_hour: int,
     selected_parameter: str,
-    metadata: dict = None,
-):
+    metadata: Optional[dict] = None,
+) -> io.BytesIO:
     """Generate a PowerPoint report with Dry Bulb, Relative Humidity and Sun Path sections."""
 
     try:
@@ -842,11 +844,11 @@ def generate_shading_pptx_report(
     metadata: dict,
     temp_threshold: float = 28.0,
     rad_threshold: float = 315.0,
-    lat: float = None,
-    lon: float = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
     tz_str: str = "UTC",
     design_cutoff_angle: float = 45.0,
-):
+) -> io.BytesIO:
     """Generate a Shading Analysis PowerPoint report using the Voha template."""
 
     try:
@@ -1435,7 +1437,7 @@ def generate_wind_pptx_report(
     df: pd.DataFrame,
     metadata: dict,
     n_sectors: int = 16,
-):
+) -> io.BytesIO:
     """Generate a Wind Analysis PowerPoint report using the Voha template."""
 
     try:
@@ -1539,7 +1541,7 @@ def generate_wind_pptx_report(
 
     # Import wind module utilities
     try:
-        from modules.wind_module import (
+        from .wind_module import (
             prepare_wind_data, compute_wind_rose, compute_wind_statistics,
             _SPEED_LABELS, _SPEED_COLORS, _SPEED_BINS,
             _DIR_16, _DIR_8, _DIR_4, _MONTH_NAMES, _MONTH_COLORS,

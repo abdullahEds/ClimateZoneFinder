@@ -5,6 +5,11 @@ import json
 import urllib.request
 import pandas as pd
 import plotly.graph_objects as go
+from .config import (
+    RUNOFF_COEFF_ROOF, RUNOFF_COEFF_PAVED,
+    RUNOFF_COEFF_GREEN, RUNOFF_COEFF_WATER,
+    VALID_GI_PERCENTILES, DEFAULT_HEAVY_RAIN_THRESHOLD,
+)
 
 try:
     import streamlit as st
@@ -26,7 +31,7 @@ except ImportError:
         session_state={},
     )
 
-STATIONS = {
+_BUILTIN_STATIONS = {
     "Bengaluru":              "IN009010100",
     "Chennai":                "IN020040900",
     "New Delhi (Safdarjung)": "IN022021900",
@@ -41,18 +46,36 @@ STATIONS = {
     "Hyderabad":              "IN01900",
 }
 
+
+def get_stations() -> dict[str, str]:
+    """Return the merged station dict (built-in + any overrides from noaa_stations.json)."""
+    import json
+    import pathlib
+    stations = dict(_BUILTIN_STATIONS)
+    override_path = pathlib.Path(__file__).parents[2] / "noaa_stations.json"
+    if override_path.exists():
+        try:
+            extra = json.loads(override_path.read_text(encoding="utf-8"))
+            stations.update({k: v for k, v in extra.items() if not k.startswith("_")})
+        except Exception:
+            pass
+    return stations
+
+
+STATIONS = get_stations()
+
 SURFACE_TYPES = {
-    "Roof Area":                               0.90,
-    "Total paved area":         0.90,
-    "Total green area":               0.10,
-    "Waterbody":                                                   0.90,
+    "Roof Area":        RUNOFF_COEFF_ROOF,
+    "Total paved area": RUNOFF_COEFF_PAVED,
+    "Total green area": RUNOFF_COEFF_GREEN,
+    "Waterbody":        RUNOFF_COEFF_WATER,
 }
 
 _RUNOFF_SURFACES = [
-    {"label": "Roof Area",                               "key": "roof",  "rc": 0.90, "color": "#1d4ed8"},
-    {"label": "Total paved area on site", "key": "paved", "rc": 0.90, "color": "#6b7280"},
-    {"label": "Total green area on site",       "key": "green", "rc": 0.10, "color": "#22c55e"},
-    {"label": "Waterbody",                                                    "key": "water", "rc": 0.90, "color": "#0891b2"},
+    {"label": "Roof Area",              "key": "roof",  "rc": RUNOFF_COEFF_ROOF,  "color": "#1d4ed8"},
+    {"label": "Total paved area on site", "key": "paved", "rc": RUNOFF_COEFF_PAVED, "color": "#6b7280"},
+    {"label": "Total green area on site", "key": "green", "rc": RUNOFF_COEFF_GREEN, "color": "#22c55e"},
+    {"label": "Waterbody",              "key": "water", "rc": RUNOFF_COEFF_WATER, "color": "#0891b2"},
 ]
 
 TYPOLOGIES = [
@@ -60,7 +83,7 @@ TYPOLOGIES = [
     "Residential", "Hotels", "University", "Other",
 ]
 
-PERCENTILE_OPTIONS = [85, 90, 95, 98]
+PERCENTILE_OPTIONS = list(VALID_GI_PERCENTILES)
 
 _MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

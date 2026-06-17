@@ -3,6 +3,7 @@
 import io
 import os
 import tempfile
+from typing import Optional
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -14,7 +15,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-from modules.rainfall_module import (
+from .rainfall_module import (
     _RUNOFF_SURFACES,
     _fetch_noaa,
     _fetch_percentile_depth,
@@ -31,7 +32,7 @@ def generate_rainfall_pptx_report(
     start_month: int = 1,
     end_month: int = 12,
     heavy_rain_threshold: float = 50.0,
-    surface_areas: dict = None,
+    surface_areas: Optional[dict[str, float]] = None,
     gi_percentile: int = 95,
     gi_start_year: int = 1990,
 ) -> io.BytesIO:

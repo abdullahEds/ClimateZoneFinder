@@ -6,7 +6,7 @@ import pytz
 import streamlit as st
 import plotly.graph_objects as go
 
-from modules.shading_helpers import (
+from .shading_helpers import (
     _MONTH_SHORT,
     _ORIENTATIONS,
     build_thermal_matrix,
@@ -17,7 +17,7 @@ from modules.shading_helpers import (
 )
 
 
-def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> dict:
+def plot_sun_path(data: pd.DataFrame, metadata: dict, chart_type: str = "Sun Path") -> go.Figure:
     """
     Generate and display an interactive Sun Path Diagram using Plotly.
 
