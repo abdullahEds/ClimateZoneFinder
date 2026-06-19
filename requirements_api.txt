@@ -15,3 +15,4 @@ httpx
 cachetools
 pytest
 pytest-asyncio
+streamlit
